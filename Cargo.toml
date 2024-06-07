@@ -1,0 +1,21 @@
+[package]
+name = "sdf_marcher"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bevy = {version = "0.14.0-rc.2", default-features = false, features = [
+  "multi_threaded",
+  "wayland",
+  "bevy_color",
+  "bevy_core_pipeline",
+  "bevy_pbr",
+  "bevy_render",
+  "bevy_winit",
+  "tonemapping_luts",
+  "file_watcher",
+
+  # Formats
+  "ktx2",
+  "zstd",
+]}
