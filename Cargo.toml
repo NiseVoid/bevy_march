@@ -19,3 +19,4 @@ bevy = {version = "0.14.0-rc.2", default-features = false, features = [
   "ktx2",
   "zstd",
 ]}
+bevy_prototype_sdf = {path = "../bevy_prototype_sdf", default-features=false, features = ["bevy_asset"]}

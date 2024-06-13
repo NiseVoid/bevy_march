@@ -1,4 +1,4 @@
-use std::{borrow::Cow, marker::PhantomData};
+use std::{borrow::Cow, marker::PhantomData, num::NonZeroU64};
 
 use bevy::{
     core_pipeline::{
@@ -8,7 +8,7 @@ use bevy::{
     ecs::query::QueryItem,
     math::{
         bounding::{Aabb2d, Aabb3d},
-        Vec3A,
+        vec3, vec3a,
     },
     prelude::*,
     render::{
@@ -20,15 +20,21 @@ use bevy::{
             NodeRunError, RenderGraphApp, RenderGraphContext, RenderLabel, ViewNode, ViewNodeRunner,
         },
         render_resource::{
-            binding_types::{texture_storage_2d, uniform_buffer},
+            binding_types::{
+                storage_buffer_read_only, storage_buffer_read_only_sized, texture_storage_2d,
+                uniform_buffer,
+            },
             *,
         },
         renderer::{RenderContext, RenderDevice},
         texture::GpuImage,
         view::RenderLayers,
-        Render, RenderApp, RenderSet,
+        Extract, Render, RenderApp, RenderSet,
     },
 };
+use bevy_prototype_sdf::Sdf3d;
+
+// TODO: We only need to re-render if any of the buffers change, the light changes, or the camera is moved
 
 fn main() {
     App::new()
@@ -39,30 +45,56 @@ fn main() {
         .run();
 }
 
-#[derive(Asset, TypePath, Default)]
+#[derive(Asset, ShaderType, TypePath, Debug, Default)]
 struct SdfMaterial {
-    base_color: LinearRgba,
-    emissive: LinearRgba,
+    base_color: Vec3,
+    emissive: Vec3,
     reflective: f32,
+}
+
+impl MarcherMaterial for SdfMaterial {
+    fn to_buffer(&self, buf: &mut Vec<u8>) {
+        buf.extend(
+            self.base_color
+                .to_array()
+                .into_iter()
+                .chain(self.emissive.to_array())
+                .chain([self.reflective, 0.])
+                .map(|f| f.to_le_bytes())
+                .flatten(),
+        );
+    }
+}
+
+// TODO: This doesn't even need to be ShaderType if we include size?
+pub trait MarcherMaterial: Asset + ShaderType + std::fmt::Debug {
+    fn to_buffer(&self, buf: &mut Vec<u8>);
 }
 
 /// It is generally encouraged to set up post processing effects as a plugin
 #[derive(Default)]
-struct RayMarcherPlugin<Material: Asset> {
+struct RayMarcherPlugin<Material: MarcherMaterial> {
     // TODO: Store shader handle for main pass compute shader
     _phantom: PhantomData<Material>,
 }
 
-impl<Material: Asset> Plugin for RayMarcherPlugin<Material> {
+impl<Material: MarcherMaterial> Plugin for RayMarcherPlugin<Material> {
     fn build(&self, app: &mut App) {
-        // TODO: More descriptive panic if we already have another RayMarcherPlugin
-        app.add_plugins((
-            ExtractComponentPlugin::<MarcherSettings>::default(),
-            UniformComponentPlugin::<MarcherSettings>::default(),
-            ExtractComponentPlugin::<MarcherMainTextures>::default(),
-        ));
+        app.init_asset::<Sdf3d>()
+            .init_asset::<Material>()
+            .add_plugins((
+                // TODO: More descriptive panic if we already have another RayMarcherPlugin
+                ExtractComponentPlugin::<MarcherSettings>::default(),
+                UniformComponentPlugin::<MarcherSettings>::default(),
+                ExtractComponentPlugin::<MarcherMainTextures>::default(),
+            ))
+            .add_systems(PostUpdate, upload_new_buffers::<Material>)
+            .init_resource::<SdfIndices>()
+            .init_resource::<MaterialIndices>();
 
         app.sub_app_mut(RenderApp)
+            .insert_resource(MaterialSize(Material::min_size()))
+            .add_systems(ExtractSchedule, extract_buffers)
             .add_systems(
                 Render,
                 prepare_bind_group.in_set(RenderSet::PrepareBindGroups),
@@ -72,13 +104,251 @@ impl<Material: Asset> Plugin for RayMarcherPlugin<Material> {
     }
 
     fn finish(&self, app: &mut App) {
-        app.sub_app_mut(RenderApp)
+        app.init_resource::<Buffers>()
+            .sub_app_mut(RenderApp)
+            .init_resource::<BufferSet>()
             .init_resource::<RayMarcherPipeline>();
     }
 }
 
+#[derive(Resource)]
+pub struct Buffers {
+    current: BufferSet,
+    new: Option<BufferSet>,
+}
+
+impl FromWorld for Buffers {
+    fn from_world(world: &mut World) -> Self {
+        Self {
+            current: BufferSet::from_world(world),
+            new: None,
+        }
+    }
+}
+
+#[derive(Resource, Clone, Debug)]
+pub struct BufferSet {
+    sdfs: Buffer,
+    materials: Buffer,
+    instances: Buffer,
+}
+
+impl FromWorld for BufferSet {
+    fn from_world(world: &mut World) -> Self {
+        let render_device = world.resource::<RenderDevice>();
+
+        let empty_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
+            usage: BufferUsages::STORAGE,
+            label: Some("Empty"),
+            contents: &[0, 0, 0, 0],
+        });
+        Self {
+            sdfs: empty_buffer.clone(),
+            materials: empty_buffer.clone(),
+            instances: empty_buffer,
+        }
+    }
+}
+
+#[derive(Resource, Deref, DerefMut, Default)]
+pub struct SdfIndices(Vec<u32>);
+
+#[derive(Resource, Deref, DerefMut, Default)]
+pub struct MaterialIndices(Vec<u32>);
+
+// TODO: We can probably split this up into three systems each with different scheduling constraints
+fn upload_new_buffers<Material: MarcherMaterial>(
+    mut buffers: ResMut<Buffers>,
+    mut sdf_events: EventReader<AssetEvent<Sdf3d>>,
+    sdfs: Res<Assets<Sdf3d>>,
+    mut sdf_indices: ResMut<SdfIndices>,
+    mut mat_events: EventReader<AssetEvent<Material>>,
+    mats: ResMut<Assets<Material>>,
+    mut mat_indices: ResMut<MaterialIndices>,
+    render_device: Res<RenderDevice>,
+    changed_query: Query<
+        (),
+        Or<(
+            Changed<Handle<Sdf3d>>,
+            Changed<Handle<Material>>,
+            Changed<GlobalTransform>,
+        )>,
+    >,
+    instances: Query<(&Handle<Sdf3d>, &Handle<Material>, &GlobalTransform)>,
+) {
+    if let Some(previous_new) = std::mem::take(&mut buffers.new) {
+        buffers.current = previous_new;
+    }
+
+    let mut new_set = None;
+
+    if sdfs.is_added() || sdf_events.read().last().is_some() {
+        info!("Updating SDF buffer");
+        sdf_indices.clear();
+        let mut sdf_buffer: Vec<u8> = Vec::with_capacity(buffers.current.sdfs.size() as usize);
+        for (id, sdf) in sdfs.iter() {
+            let AssetId::Index { index, .. } = id else {
+                warn_once!("Only dense asset storage is supported for sdfs");
+                continue;
+            };
+            let index = (index.to_bits() & (u32::MAX as u64)) as usize;
+            let start_offset = (sdf_buffer.len() / 4) as u32;
+
+            sdf.to_buffer(&mut sdf_buffer);
+
+            while index >= sdf_indices.len() {
+                sdf_indices.push(0);
+            }
+            sdf_indices[index] = start_offset;
+        }
+
+        if sdf_buffer.len() < 4 {
+            sdf_buffer.extend([0; 4]);
+        }
+
+        new_set = new_set
+            .or_else(|| Some(buffers.current.clone()))
+            .map(|mut s| {
+                s.sdfs = render_device.create_buffer_with_data(&BufferInitDescriptor {
+                    usage: BufferUsages::STORAGE,
+                    label: Some("SDF buffer"),
+                    contents: &sdf_buffer,
+                });
+                s
+            });
+    }
+
+    if mats.is_added() || mat_events.read().last().is_some() {
+        info!("Updating materials buffer");
+        mat_indices.clear();
+        let mat_size = Material::min_size().get() as usize;
+        info!("- Min material size: {:?}", mat_size);
+        let mut mats_buffer: Vec<u8> = Vec::with_capacity(mats.len().min(1) * mat_size);
+        for (id, mat) in mats.iter() {
+            let AssetId::Index { index, .. } = id else {
+                warn_once!("Only dense asset storage is supported for materials");
+                continue;
+            };
+            let index = (index.to_bits() & (u32::MAX as u64)) as usize;
+            eprintln!("- Material {}: {:?}", index, mat);
+            let start_offset = (mats_buffer.len() / 4) as u32;
+
+            mat.to_buffer(&mut mats_buffer);
+
+            while index >= mat_indices.len() {
+                mat_indices.push(0);
+            }
+            mat_indices[index] = start_offset;
+        }
+
+        if mats_buffer.len() < Material::min_size().get() as usize {
+            mats_buffer.extend((0..mat_size).map(|_| 0));
+        }
+
+        new_set = new_set
+            .or_else(|| Some(buffers.current.clone()))
+            .map(|mut s| {
+                s.materials = render_device.create_buffer_with_data(&BufferInitDescriptor {
+                    usage: BufferUsages::STORAGE,
+                    label: Some("Material buffer"),
+                    contents: &mats_buffer,
+                });
+                s
+            });
+    }
+
+    if new_set.is_none() && changed_query.is_empty() {
+        return;
+    }
+
+    info!("Buffers or transforms changed, rebuilding instance buffer",);
+
+    let n_instances = instances.iter().count();
+    // Translation = 3 floats, Rotation = 9 floats, scale = 1 float
+    // 13 floats = 52 bytes
+    let mut instance_buffer: Vec<u8> = Vec::with_capacity(4 + n_instances * 52);
+    instance_buffer.extend((n_instances as u32).to_le_bytes());
+    for (sdf, mat, transform) in instances.iter() {
+        let AssetId::Index { index, .. } = sdf.id() else {
+            continue;
+        };
+        let index = (index.to_bits() & (u32::MAX as u64)) as usize;
+        let sdf_index = sdf_indices[index];
+
+        let AssetId::Index { index, .. } = mat.id() else {
+            continue;
+        };
+        let index = (index.to_bits() & (u32::MAX as u64)) as usize;
+        let mat_index = mat_indices[index];
+
+        let matrix = transform.affine().matrix3;
+        let matrix_transpose = matrix.transpose();
+        let difference = matrix * matrix_transpose;
+        if difference.x_axis.yz().max_element() > 0.0001
+            || difference.y_axis.xz().max_element() > 0.0001
+            || difference.z_axis.xy().max_element() > 0.0001
+        {
+            warn!(
+                "GlobalTransform can only contain translation, rotation and uniform scale.
+                Expected uniformly scaled matrix after canceling rotation but got {:?}",
+                difference
+            );
+            continue;
+        }
+
+        let squared_scale = vec3(
+            difference.x_axis.x,
+            difference.y_axis.y,
+            difference.z_axis.z,
+        );
+        if (squared_scale.x - squared_scale.y).abs() > 0.0001
+            || (squared_scale.x - squared_scale.z).abs() > 0.0001
+        {
+            warn!(
+                "Non-uniform scaling is not supported, but found scale: {:?}",
+                Vec3::from(squared_scale.to_array().map(|f| f.sqrt()))
+            );
+            continue;
+        }
+
+        let scale = squared_scale.x.sqrt();
+        let inv_scale = scale.recip();
+
+        let translation = transform.translation();
+        let rotation = matrix * inv_scale;
+
+        info!("Instance: {:?} {:?} {:?}", translation, rotation, scale);
+
+        instance_buffer.extend(
+            [sdf_index, mat_index]
+                .into_iter()
+                .map(|u| u.to_le_bytes())
+                .chain(
+                    translation
+                        .to_array()
+                        .into_iter()
+                        .chain(rotation.to_cols_array())
+                        .chain([scale].into_iter())
+                        .map(|f| f.to_le_bytes()),
+                )
+                .flatten(),
+        );
+    }
+
+    buffers.new = new_set
+        .or_else(|| Some(buffers.current.clone()))
+        .map(|mut s| {
+            s.instances = render_device.create_buffer_with_data(&BufferInitDescriptor {
+                usage: BufferUsages::STORAGE,
+                label: Some("Instance buffer"),
+                contents: &instance_buffer,
+            });
+            s
+        });
+}
+
 // TODO: Use resolution or a integer division of it instead of a hardcoded 1280x720
-const SIZE: (u32, u32) = (1280, 720);
+const SIZE: (u32, u32) = (720, 720);
 const WORKGROUP_SIZE: u32 = 8;
 const CONE_SIZE: u32 = 8;
 const BLOCK_SIZE: u32 = WORKGROUP_SIZE * CONE_SIZE;
@@ -91,7 +361,7 @@ struct RayMarcherLabel;
 struct RayMarcherNode;
 
 impl ViewNode for RayMarcherNode {
-    type ViewQuery = (&'static MarcherSettings, &'static MarcherTextureBindGroup);
+    type ViewQuery = (&'static MarcherSettings, &'static MarcherStorageBindGroup);
 
     fn run(
         &self,
@@ -135,39 +405,74 @@ impl ViewNode for RayMarcherNode {
     }
 }
 
+fn extract_buffers(buffers: Extract<Res<Buffers>>, mut extracted: ResMut<BufferSet>) {
+    let Some(new_buffers) = &buffers.new else {
+        return;
+    };
+
+    info!("Replacing buffers: {:?}", *extracted);
+    if new_buffers.sdfs.id() != extracted.sdfs.id() {
+        info!("- Destroying sdf buffer");
+        extracted.sdfs.destroy();
+    }
+    if new_buffers.materials.id() != extracted.materials.id() {
+        info!("- Destroying material buffer");
+        extracted.materials.destroy();
+    }
+    if new_buffers.instances.id() != extracted.instances.id() {
+        info!("- Destroying instance buffer");
+        extracted.instances.destroy();
+    }
+
+    *extracted = (*new_buffers).clone();
+    info!("- New buffers: {:?}", *extracted);
+}
+
 #[derive(Component)]
-struct MarcherTextureBindGroup(BindGroup);
+struct MarcherStorageBindGroup(BindGroup);
 
 fn prepare_bind_group(
     mut commands: Commands,
     pipeline: Res<RayMarcherPipeline>,
     gpu_images: Res<RenderAssets<GpuImage>>,
     textures: Query<(Entity, &MarcherMainTextures)>,
+    buffer_set: Res<BufferSet>,
     render_device: Res<RenderDevice>,
 ) {
+    // TODO: Swap buffers if new ones are available, and drop old ones if necessary
     for (entity, textures) in textures.iter() {
         let depth = gpu_images.get(textures.depth.id()).unwrap();
         let color = gpu_images.get(textures.color.id()).unwrap();
         let bind_group = render_device.create_bind_group(
             None,
-            &pipeline.textures_layout,
-            &BindGroupEntries::sequential((&depth.texture_view, &color.texture_view)),
+            &pipeline.storage_layout,
+            &BindGroupEntries::sequential((
+                &depth.texture_view,
+                &color.texture_view,
+                buffer_set.sdfs.as_entire_binding(),
+                buffer_set.materials.as_entire_binding(),
+                buffer_set.instances.as_entire_binding(),
+            )),
         );
         commands
             .entity(entity)
-            .insert(MarcherTextureBindGroup(bind_group));
+            .insert(MarcherStorageBindGroup(bind_group));
     }
 }
+
+#[derive(Resource, Deref)]
+struct MaterialSize(NonZeroU64);
 
 #[derive(Resource)]
 struct RayMarcherPipeline {
     settings_layout: BindGroupLayout,
-    textures_layout: BindGroupLayout,
+    storage_layout: BindGroupLayout,
     pipeline_id: CachedComputePipelineId,
 }
 
 impl FromWorld for RayMarcherPipeline {
     fn from_world(world: &mut World) -> Self {
+        let mat_size = **world.resource::<MaterialSize>();
         let render_device = world.resource::<RenderDevice>();
 
         let settings_layout = render_device.create_bind_group_layout(
@@ -177,13 +482,21 @@ impl FromWorld for RayMarcherPipeline {
                 (uniform_buffer::<MarcherSettings>(false),),
             ),
         );
-        let textures_layout = render_device.create_bind_group_layout(
-            "marcher_settings_bind_group_layout",
+        let storage_layout = render_device.create_bind_group_layout(
+            "marcher_storage_bind_group_layout",
             &BindGroupLayoutEntries::sequential(
                 ShaderStages::COMPUTE,
                 (
+                    // Depth texture
                     texture_storage_2d(TextureFormat::R32Float, StorageTextureAccess::WriteOnly),
+                    // Color texture
                     texture_storage_2d(TextureFormat::Rgba16Float, StorageTextureAccess::WriteOnly),
+                    // SDFs
+                    storage_buffer_read_only::<u32>(false),
+                    // Materials
+                    storage_buffer_read_only_sized(false, Some(mat_size)),
+                    // Instances
+                    storage_buffer_read_only::<u32>(false),
                 ),
             ),
         );
@@ -194,7 +507,7 @@ impl FromWorld for RayMarcherPipeline {
             .resource_mut::<PipelineCache>()
             .queue_compute_pipeline(ComputePipelineDescriptor {
                 label: Some("ray_marcher_pipeline".into()),
-                layout: vec![settings_layout.clone(), textures_layout.clone()],
+                layout: vec![settings_layout.clone(), storage_layout.clone()],
                 push_constant_ranges: Vec::new(),
                 shader: shader.clone(),
                 shader_defs: vec![],
@@ -203,7 +516,7 @@ impl FromWorld for RayMarcherPipeline {
 
         Self {
             settings_layout,
-            textures_layout,
+            storage_layout,
             pipeline_id,
         }
     }
@@ -230,8 +543,8 @@ impl MarcherMainTextures {
     fn new(images: &mut Assets<Image>) -> Self {
         let mut depth = Image::new_fill(
             Extent3d {
-                width: 1280,
-                height: 720,
+                width: SIZE.0,
+                height: SIZE.1,
                 depth_or_array_layers: 1,
             },
             TextureDimension::D2,
@@ -246,8 +559,8 @@ impl MarcherMainTextures {
 
         let mut color = Image::new_fill(
             Extent3d {
-                width: 1280,
-                height: 720,
+                width: SIZE.0,
+                height: SIZE.1,
                 depth_or_array_layers: 1,
             },
             TextureDimension::D2,
@@ -313,7 +626,9 @@ fn setup(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut mats: ResMut<Assets<StandardMaterial>>,
+    mut std_mats: ResMut<Assets<StandardMaterial>>,
+    mut sdfs: ResMut<Assets<Sdf3d>>,
+    mut mats: ResMut<Assets<SdfMaterial>>,
 ) {
     let main_textures = MarcherMainTextures::new(&mut images);
     let shadow_textures = MarcherShadowTextures::new(&mut images);
@@ -323,7 +638,7 @@ fn setup(
     // Color plane
     commands.spawn(PbrBundle {
         mesh: mesh.clone(),
-        material: mats.add(StandardMaterial {
+        material: std_mats.add(StandardMaterial {
             base_color_texture: Some(main_textures.color.clone()),
             ..default()
         }),
@@ -333,7 +648,7 @@ fn setup(
     // Depth plane
     commands.spawn(PbrBundle {
         mesh: mesh.clone(),
-        material: mats.add(StandardMaterial {
+        material: std_mats.add(StandardMaterial {
             base_color_texture: Some(main_textures.depth.clone()),
             ..default()
         }),
@@ -344,7 +659,7 @@ fn setup(
     // Shadow plane
     commands.spawn(PbrBundle {
         mesh,
-        material: mats.add(StandardMaterial {
+        material: std_mats.add(StandardMaterial {
             base_color_texture: Some(shadow_textures.shadow_map.clone()),
             ..default()
         }),
@@ -355,7 +670,7 @@ fn setup(
     // Camera
     commands.spawn((
         Camera3dBundle {
-            transform: Transform::from_translation(Vec3::new(0.0, 0.0, 5.0))
+            transform: Transform::from_translation(vec3(0.0, 0.0, 5.0))
                 .looking_at(Vec3::X, Vec3::Y),
             camera: Camera {
                 hdr: true,
@@ -391,6 +706,71 @@ fn setup(
         MarcherShadowSettings::default(),
         shadow_textures,
     ));
+
+    // TODO: Spawn moons
+    // let moon2d = sd_moon(pos.xz - vec2<f32>(-0.5, -10.), -1., 4., 3.3);
+    // var moon: Sdf;
+    // moon.dist = op_extrude(pos.y + 2.25, moon2d, 0.05) - 0.03;
+    // moon.mat = 1u;
+
+    // let moon2_2d = sd_moon(pos.xz - vec2<f32>(2., -10.), -0.5, 1., 0.75);
+    // var moon2: Sdf;
+    // moon2.dist = op_extrude(pos.y + 2.15, moon2_2d, 0.2) - 0.03;
+    // moon2.mat = 1u;
+
+    // let moon3_2d = sd_moon(pos.xz - vec2<f32>(2.9, -9.), -0.4, 0.75, 0.5);
+    // var moon3: Sdf;
+    // moon3.dist = op_extrude(pos.y + 2.1, moon3_2d, 0.3) - 0.03;
+    // moon3.mat = 1u;
+
+    let sphere = sdfs.add(Sdf3d::from(Sphere::default()));
+    let center_material = mats.add(SdfMaterial {
+        base_color: LinearRgba::BLACK.to_vec3(),
+        emissive: LinearRgba::rgb(0., 1.8, 2.).to_vec3(),
+        reflective: 0.,
+    });
+
+    commands.spawn((
+        TransformBundle::from_transform(Transform::from_xyz(0., -0.5, -10.)),
+        sphere.clone(),
+        center_material,
+    ));
+
+    let sphere_material = mats.add(SdfMaterial {
+        base_color: LinearRgba::gray(0.7).to_vec3(),
+        emissive: LinearRgba::BLACK.to_vec3(),
+        reflective: 0.,
+    });
+
+    for pos in [
+        vec3(3., -1.6, -15.),
+        vec3(-5., -1.3, -12.),
+        vec3(6., -1.4, -9.),
+        vec3(-5., -1.5, -7.),
+    ] {
+        commands.spawn((
+            TransformBundle::from_transform(
+                Transform::from_translation(pos).with_scale(Vec3::splat(0.6)),
+            ),
+            sphere.clone(),
+            sphere_material.clone(),
+        ));
+    }
+
+    // TODO
+    // let water_plane = sdfs.add(Sdf3d::from(InfinitePlane3d::default()));
+    let water_material = mats.add(SdfMaterial {
+        base_color: LinearRgba::rgb(0., 0.3, 1.).to_vec3(),
+        emissive: LinearRgba::BLACK.to_vec3(),
+        reflective: 0.8,
+    });
+    std::mem::forget(water_material);
+
+    // commands.spawn((
+    //     TransformBundle::from_transform(Transform::from_xyz(0., -2.25, 0.)),
+    //     water_plane,
+    //     water_material,
+    // ));
 }
 
 fn update_settings(
@@ -427,10 +807,10 @@ fn update_settings(
         let x = 0.5 * settings.aspect_ratio;
         let rotation = Quat::from_mat3a(&rotation);
 
-        let tl_dir = Dir3A::new(Vec3A::new(-x, 0.5, -settings.perspective_factor)).unwrap();
-        let tr_dir = rotation * Dir3A::new_unchecked(Vec3A::new(-tl_dir.x, tl_dir.y, tl_dir.z));
-        let bl_dir = rotation * Dir3A::new_unchecked(Vec3A::new(tl_dir.x, -tl_dir.y, tl_dir.z));
-        let br_dir = rotation * Dir3A::new_unchecked(Vec3A::new(-tl_dir.x, -tl_dir.y, tl_dir.z));
+        let tl_dir = Dir3A::new(vec3a(-x, 0.5, -settings.perspective_factor)).unwrap();
+        let tr_dir = rotation * Dir3A::new_unchecked(vec3a(-tl_dir.x, tl_dir.y, tl_dir.z));
+        let bl_dir = rotation * Dir3A::new_unchecked(vec3a(tl_dir.x, -tl_dir.y, tl_dir.z));
+        let br_dir = rotation * Dir3A::new_unchecked(vec3a(-tl_dir.x, -tl_dir.y, tl_dir.z));
         let tl_dir = rotation * tl_dir;
 
         let fwd = rotation * Dir3::NEG_Z;

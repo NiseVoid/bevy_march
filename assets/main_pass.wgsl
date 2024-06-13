@@ -1,7 +1,15 @@
 #import "ray_marcher.wgsl"::{march_ray, MarchSettings, get_initial_settings, settings, calc_normal, get_occlusion};
+#import "ray_marcher.wgsl"::{shape_data, instance_data};
 
 @group(1) @binding(0) var depth_texture: texture_storage_2d<r32float, write>;
 @group(1) @binding(1) var color_texture: texture_storage_2d<rgba16float, write>;
+@group(1) @binding(3) var<storage, read> materials: array<Material>;
+
+struct Material {
+    base_color: vec3<f32>,
+    emissive: vec3<f32>,
+    reflective: f32,
+}
 
 // TODO:
 // struct RayMarcherSettings {
@@ -10,9 +18,6 @@
 //     // TODO: Ambient color
 // }
 // @group(0) @binding(2) var<uniform> pass_settings: MainPassSettings;
-
-// TODO: Material buffer
-//   - Base color, emissive, reflective, AO, etc
 
 @compute @workgroup_size(8, 8, 1)
 fn march(
@@ -44,22 +49,28 @@ fn march_single(uv: vec2<f32>) -> vec4<f32> {
     let s = sin(settings.t / 2. % 6.35);
     let light_dir = normalize(vec3<f32>(s, 0.7, c));
 
-    var tint = vec3<f32>(1.);
     if res.distance < 0.1 {
         let hit = march.origin + march.direction * (res.traveled - 0.01);
         let normal = calc_normal(hit);
         var diffuse = max(dot(normal, light_dir), 0.);
-        tint = get_albedo(res.material);
-        var emission = get_emission(res.material);
-        if res.material == 4u {
+
+        let material = materials[res.material];
+        var tint = material.base_color;
+        var emission = material.emissive;
+        if material.reflective > 0.01 {
+            let refl_strength = (1. - material.reflective);
+            let base_color = refl_strength * material.base_color;
+
             var reflected: MarchSettings;
             reflected.origin = hit;
             reflected.direction = reflect(march.direction, normal);
             reflected.limit = settings.far - res.traveled;
             let res = march_ray(reflected);
+            let refl_mat = materials[res.material];
             if res.distance < 0.1 {
-                emission = tint * get_emission(res.material);
-                tint *= get_albedo(res.material);
+                emission = base_color * refl_mat.emissive;
+                tint = base_color * material.reflective + refl_strength * refl_mat.base_color;
+
                 let reflected_hit = hit + reflected.direction * (res.traveled - 0.01);
                 let reflected_normal = calc_normal(reflected_hit);
                 diffuse = max(dot(reflected_normal, light_dir), 0.);
@@ -111,37 +122,6 @@ fn skybox(direction: vec3<f32>) -> vec3<f32> {
     );
 
     return max(background, vec3<f32>(star));
-}
-
-fn get_albedo(material: u32) -> vec3<f32> {
-    switch material {
-        case 1u: {
-            return vec3<f32>(0.9, 1.5, 1.7);
-        }
-        case 2u: {
-            return vec3<f32>(1.);
-        }
-        case 3u: {
-            return vec3<f32>(0.6, 1., 0.9);
-        }
-        case 4u: {
-            return vec3<f32>(0.75, 0.75, 1.);
-        }
-        default: {
-            return vec3<f32>(0.);
-        }
-    }
-}
-
-fn get_emission(material: u32) -> vec3<f32> {
-    switch material {
-        case 2u: {
-            return vec3<f32>(0., 1.8, 2.);
-        }
-        default: {
-            return vec3<f32>(0.);
-        }
-    }
 }
 
 fn sd_star(pos: vec2<f32>, r: f32, n: u32, m: f32) -> f32 {

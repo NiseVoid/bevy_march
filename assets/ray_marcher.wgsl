@@ -10,12 +10,9 @@ struct RayMarcherSettings {
 }
 @group(0) @binding(0) var<uniform> settings: RayMarcherSettings;
 
-// TODO: Shape buffer
-//   - SDF data
-// TODO: Instance buffer
-//  - Transform matrix
-//  - Shape
-//  - Material
+@group(1) @binding(2) var<storage, read> shape_data: array<u32>;
+@group(1) @binding(3) var<storage, read> material_data: array<u32>;
+@group(1) @binding(4) var<storage, read> instance_data: array<u32>;
 
 struct MarchSettings {
     origin: vec3<f32>,
@@ -122,7 +119,7 @@ fn get_scene_dist(pos: vec3<f32>) -> Sdf {
     let center_t = sin(settings.t * 0.4) * 0.4;
     var center_sphere: Sdf;
     center_sphere.dist = sd_sphere(vec3<f32>(0., -0.5+center_t, -10.) - pos, 0.5);
-    center_sphere.mat = 2u;
+    center_sphere.mat = 0u;
 
     let sin_t = sin(settings.t * 0.5) * 0.5;
     let sphere1 = sd_sphere(vec3<f32>(3., -1.4 - sin_t, -15.) - pos, 0.3);
@@ -132,11 +129,11 @@ fn get_scene_dist(pos: vec3<f32>) -> Sdf {
 
     var spheres: Sdf;
     spheres.dist = min(min(sphere1, sphere2), min(sphere3, sphere4));
-    spheres.mat = 3u;
+    spheres.mat = 1u;
 
     var water: Sdf;
     water.dist = sd_plane(pos - vec3<f32>(0., -2.25, 0.));
-    water.mat = 4u;
+    water.mat = 2u;
 
     var res = sdf_min(moon, moon2);
     res = sdf_min(res, moon3);
