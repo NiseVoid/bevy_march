@@ -11,8 +11,16 @@ struct RayMarcherSettings {
 @group(0) @binding(0) var<uniform> settings: RayMarcherSettings;
 
 @group(1) @binding(2) var<storage, read> shape_data: array<u32>;
-@group(1) @binding(3) var<storage, read> material_data: array<u32>;
-@group(1) @binding(4) var<storage, read> instance_data: array<u32>;
+
+struct Instance {
+    shape_offset: u32,
+    material: u32,
+    scale: f32,
+    translation: vec3<f32>,
+    matrix: mat3x3<f32>,
+}
+
+@group(1) @binding(4) var<storage, read> instances: array<Instance>;
 
 struct MarchSettings {
     origin: vec3<f32>,
@@ -101,45 +109,23 @@ fn sdf_min(a: Sdf, b: Sdf) -> Sdf {
 }
 
 fn get_scene_dist(pos: vec3<f32>) -> Sdf {    
-    let moon2d = sd_moon(pos.xz - vec2<f32>(-0.5, -10.), -1., 4., 3.3);
-    var moon: Sdf;
-    moon.dist = op_extrude(pos.y + 2.25, moon2d, 0.05) - 0.03;
-    moon.mat = 1u;
+    var res: Sdf;
+    res.dist = 1000000.;
+    let instance_count = arrayLength(&instances);
+    if instance_count == 0 {
+        return res;
+    }
 
-    let moon2_2d = sd_moon(pos.xz - vec2<f32>(2., -10.), -0.5, 1., 0.75);
-    var moon2: Sdf;
-    moon2.dist = op_extrude(pos.y + 2.15, moon2_2d, 0.2) - 0.03;
-    moon2.mat = 1u;
+    for (var i = 0u; i < instance_count; i++) {
+        let instance = instances[i];
+        let relative_pos = instance.matrix * (pos - instance.translation);
+        // TODO: Use a shape that lets us test rotation
+        var current: Sdf;
+        current.dist = sd_sphere(relative_pos / instance.scale, 0.5) * instance.scale;
+        current.mat = instance.material;
 
-    let moon3_2d = sd_moon(pos.xz - vec2<f32>(2.9, -9.), -0.4, 0.75, 0.5);
-    var moon3: Sdf;
-    moon3.dist = op_extrude(pos.y + 2.1, moon3_2d, 0.3) - 0.03;
-    moon3.mat = 1u;
-
-    let center_t = sin(settings.t * 0.4) * 0.4;
-    var center_sphere: Sdf;
-    center_sphere.dist = sd_sphere(vec3<f32>(0., -0.5+center_t, -10.) - pos, 0.5);
-    center_sphere.mat = 0u;
-
-    let sin_t = sin(settings.t * 0.5) * 0.5;
-    let sphere1 = sd_sphere(vec3<f32>(3., -1.4 - sin_t, -15.) - pos, 0.3);
-    let sphere2 = sd_sphere(vec3<f32>(-5., -1.4 + sin_t, -12.) - pos, 0.3);
-    let sphere3 = sd_sphere(vec3<f32>(6., -1.4 + sin_t, -9.) - pos, 0.3);
-    let sphere4 = sd_sphere(vec3<f32>(-5., -1.4 - sin_t, -7.) - pos, 0.3);
-
-    var spheres: Sdf;
-    spheres.dist = min(min(sphere1, sphere2), min(sphere3, sphere4));
-    spheres.mat = 1u;
-
-    var water: Sdf;
-    water.dist = sd_plane(pos - vec3<f32>(0., -2.25, 0.));
-    water.mat = 2u;
-
-    var res = sdf_min(moon, moon2);
-    res = sdf_min(res, moon3);
-    res = sdf_min(res, center_sphere);
-    res = sdf_min(res, spheres);
-    res = sdf_min(res, water);
+        res = sdf_min(res, current);
+    }
 
     return res;
 }

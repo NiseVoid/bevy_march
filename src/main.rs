@@ -24,9 +24,10 @@ use bevy::{
                 storage_buffer_read_only, storage_buffer_read_only_sized, texture_storage_2d,
                 uniform_buffer,
             },
+            encase::internal::WriteInto,
             *,
         },
-        renderer::{RenderContext, RenderDevice},
+        renderer::{RenderContext, RenderDevice, RenderQueue},
         texture::GpuImage,
         view::RenderLayers,
         Extract, Render, RenderApp, RenderSet,
@@ -45,31 +46,16 @@ fn main() {
         .run();
 }
 
-#[derive(Asset, ShaderType, TypePath, Debug, Default)]
+#[derive(Asset, ShaderType, TypePath, Clone, Debug, Default)]
 struct SdfMaterial {
     base_color: Vec3,
     emissive: Vec3,
     reflective: f32,
 }
 
-impl MarcherMaterial for SdfMaterial {
-    fn to_buffer(&self, buf: &mut Vec<u8>) {
-        buf.extend(
-            self.base_color
-                .to_array()
-                .into_iter()
-                .chain(self.emissive.to_array())
-                .chain([self.reflective, 0.])
-                .map(|f| f.to_le_bytes())
-                .flatten(),
-        );
-    }
-}
+impl MarcherMaterial for SdfMaterial {}
 
-// TODO: This doesn't even need to be ShaderType if we include size?
-pub trait MarcherMaterial: Asset + ShaderType + std::fmt::Debug {
-    fn to_buffer(&self, buf: &mut Vec<u8>);
-}
+pub trait MarcherMaterial: Asset + ShaderType + WriteInto + std::fmt::Debug + Clone {}
 
 /// It is generally encouraged to set up post processing effects as a plugin
 #[derive(Default)]
@@ -142,6 +128,7 @@ impl FromWorld for BufferSet {
             label: Some("Empty"),
             contents: &[0, 0, 0, 0],
         });
+
         Self {
             sdfs: empty_buffer.clone(),
             materials: empty_buffer.clone(),
@@ -156,6 +143,15 @@ pub struct SdfIndices(Vec<u32>);
 #[derive(Resource, Deref, DerefMut, Default)]
 pub struct MaterialIndices(Vec<u32>);
 
+#[derive(ShaderType)]
+struct Instance {
+    sdf_index: u32,
+    mat_index: u32,
+    scale: f32,
+    translation: Vec3,
+    rotation: Mat3,
+}
+
 // TODO: We can probably split this up into three systems each with different scheduling constraints
 fn upload_new_buffers<Material: MarcherMaterial>(
     mut buffers: ResMut<Buffers>,
@@ -166,6 +162,7 @@ fn upload_new_buffers<Material: MarcherMaterial>(
     mats: ResMut<Assets<Material>>,
     mut mat_indices: ResMut<MaterialIndices>,
     render_device: Res<RenderDevice>,
+    render_queue: Res<RenderQueue>,
     changed_query: Query<
         (),
         Or<(
@@ -221,19 +218,16 @@ fn upload_new_buffers<Material: MarcherMaterial>(
     if mats.is_added() || mat_events.read().last().is_some() {
         info!("Updating materials buffer");
         mat_indices.clear();
-        let mat_size = Material::min_size().get() as usize;
-        info!("- Min material size: {:?}", mat_size);
-        let mut mats_buffer: Vec<u8> = Vec::with_capacity(mats.len().min(1) * mat_size);
+        let mut mats_buffer = BufferVec::<Material>::new(BufferUsages::STORAGE);
         for (id, mat) in mats.iter() {
             let AssetId::Index { index, .. } = id else {
                 warn_once!("Only dense asset storage is supported for materials");
                 continue;
             };
             let index = (index.to_bits() & (u32::MAX as u64)) as usize;
-            eprintln!("- Material {}: {:?}", index, mat);
             let start_offset = (mats_buffer.len() / 4) as u32;
 
-            mat.to_buffer(&mut mats_buffer);
+            mats_buffer.push(mat.clone());
 
             while index >= mat_indices.len() {
                 mat_indices.push(0);
@@ -241,18 +235,11 @@ fn upload_new_buffers<Material: MarcherMaterial>(
             mat_indices[index] = start_offset;
         }
 
-        if mats_buffer.len() < Material::min_size().get() as usize {
-            mats_buffer.extend((0..mat_size).map(|_| 0));
-        }
-
         new_set = new_set
             .or_else(|| Some(buffers.current.clone()))
             .map(|mut s| {
-                s.materials = render_device.create_buffer_with_data(&BufferInitDescriptor {
-                    usage: BufferUsages::STORAGE,
-                    label: Some("Material buffer"),
-                    contents: &mats_buffer,
-                });
+                mats_buffer.write_buffer(&*render_device, &*render_queue);
+                s.materials = mats_buffer.buffer().unwrap().clone();
                 s
             });
     }
@@ -263,11 +250,7 @@ fn upload_new_buffers<Material: MarcherMaterial>(
 
     info!("Buffers or transforms changed, rebuilding instance buffer",);
 
-    let n_instances = instances.iter().count();
-    // Translation = 3 floats, Rotation = 9 floats, scale = 1 float
-    // 13 floats = 52 bytes
-    let mut instance_buffer: Vec<u8> = Vec::with_capacity(4 + n_instances * 52);
-    instance_buffer.extend((n_instances as u32).to_le_bytes());
+    let mut instance_buffer = BufferVec::<Instance>::new(BufferUsages::STORAGE);
     for (sdf, mat, transform) in instances.iter() {
         let AssetId::Index { index, .. } = sdf.id() else {
             continue;
@@ -319,30 +302,20 @@ fn upload_new_buffers<Material: MarcherMaterial>(
 
         info!("Instance: {:?} {:?} {:?}", translation, rotation, scale);
 
-        instance_buffer.extend(
-            [sdf_index, mat_index]
-                .into_iter()
-                .map(|u| u.to_le_bytes())
-                .chain(
-                    translation
-                        .to_array()
-                        .into_iter()
-                        .chain(rotation.to_cols_array())
-                        .chain([scale].into_iter())
-                        .map(|f| f.to_le_bytes()),
-                )
-                .flatten(),
-        );
+        instance_buffer.push(Instance {
+            sdf_index,
+            mat_index,
+            scale,
+            translation,
+            rotation: rotation.into(),
+        });
     }
 
     buffers.new = new_set
         .or_else(|| Some(buffers.current.clone()))
         .map(|mut s| {
-            s.instances = render_device.create_buffer_with_data(&BufferInitDescriptor {
-                usage: BufferUsages::STORAGE,
-                label: Some("Instance buffer"),
-                contents: &instance_buffer,
-            });
+            instance_buffer.write_buffer(&*render_device, &*render_queue);
+            s.instances = instance_buffer.buffer().unwrap().clone();
             s
         });
 }
@@ -496,7 +469,7 @@ impl FromWorld for RayMarcherPipeline {
                     // Materials
                     storage_buffer_read_only_sized(false, Some(mat_size)),
                     // Instances
-                    storage_buffer_read_only::<u32>(false),
+                    storage_buffer_read_only::<Instance>(false),
                 ),
             ),
         );
@@ -762,7 +735,7 @@ fn setup(
     let water_material = mats.add(SdfMaterial {
         base_color: LinearRgba::rgb(0., 0.3, 1.).to_vec3(),
         emissive: LinearRgba::BLACK.to_vec3(),
-        reflective: 0.8,
+        reflective: 0.7,
     });
     std::mem::forget(water_material);
 

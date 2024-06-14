@@ -55,11 +55,11 @@ fn march_single(uv: vec2<f32>) -> vec4<f32> {
         var diffuse = max(dot(normal, light_dir), 0.);
 
         let material = materials[res.material];
-        var tint = material.base_color;
+        var albedo = material.base_color;
         var emission = material.emissive;
         if material.reflective > 0.01 {
-            let refl_strength = (1. - material.reflective);
-            let base_color = refl_strength * material.base_color;
+            let base_strength = (1. - material.reflective);
+            let base_color = base_strength * material.base_color;
 
             var reflected: MarchSettings;
             reflected.origin = hit;
@@ -68,19 +68,19 @@ fn march_single(uv: vec2<f32>) -> vec4<f32> {
             let res = march_ray(reflected);
             let refl_mat = materials[res.material];
             if res.distance < 0.1 {
-                emission = base_color * refl_mat.emissive;
-                tint = base_color * material.reflective + refl_strength * refl_mat.base_color;
+                emission += refl_mat.emissive * material.reflective;
+                albedo = base_color + refl_mat.base_color * material.reflective;
 
                 let reflected_hit = hit + reflected.direction * (res.traveled - 0.01);
                 let reflected_normal = calc_normal(reflected_hit);
                 diffuse = max(dot(reflected_normal, light_dir), 0.);
             } else {
-                tint *= skybox(reflected.direction);
+                albedo = base_color + skybox(reflected.direction) * material.reflective;
             }
         }
         let ao = get_occlusion(march.origin + march.direction * res.traveled, normal);
         let light = max(diffuse, ao * 0.4);
-        let color = max(emission, vec3<f32>(tint * light));
+        let color = max(emission, vec3<f32>(albedo * light));
         if res.traveled > 40. {
             let factor = min((res.traveled - 40.) / 40., 1.);
             return vec4<f32>(
