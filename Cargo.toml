@@ -3,6 +3,15 @@ name = "sdf_marcher"
 version = "0.1.0"
 edition = "2021"
 
+[profile.dev]
+opt-level = 1
+lto = "off"
+debug-assertions = true
+
+[profile.dev.package."*"]
+opt-level = 3
+debug-assertions = true
+
 [dependencies]
 bevy = {version = "0.14.0-rc.2", default-features = false, features = [
   "multi_threaded",

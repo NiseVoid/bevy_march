@@ -143,6 +143,7 @@ pub struct SdfIndices(Vec<u32>);
 #[derive(Resource, Deref, DerefMut, Default)]
 pub struct MaterialIndices(Vec<u32>);
 
+// TODO: This type becomes 80 bytes on the GPU, investigate performance of alternatives
 #[derive(ShaderType)]
 struct Instance {
     sdf_index: u32,
