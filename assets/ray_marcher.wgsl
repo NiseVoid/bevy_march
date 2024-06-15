@@ -110,7 +110,7 @@ fn sdf_min(a: Sdf, b: Sdf) -> Sdf {
 
 fn get_scene_dist(pos: vec3<f32>) -> Sdf {    
     var res: Sdf;
-    res.dist = 1000000.;
+    res.dist = 1e9;
     let instance_count = arrayLength(&instances);
     if instance_count == 0 {
         return res;
@@ -118,10 +118,10 @@ fn get_scene_dist(pos: vec3<f32>) -> Sdf {
 
     for (var i = 0u; i < instance_count; i++) {
         let instance = instances[i];
+        // TODO: Encode the `/ instance.scale` in the matrix
         let relative_pos = instance.matrix * (pos - instance.translation);
-        // TODO: Use a shape that lets us test rotation
         var current: Sdf;
-        current.dist = sd_sphere(relative_pos / instance.scale, 0.5) * instance.scale;
+        current.dist = sdf(relative_pos / instance.scale, instance.shape_offset) * instance.scale;
         current.mat = instance.material;
 
         res = sdf_min(res, current);
@@ -130,25 +130,74 @@ fn get_scene_dist(pos: vec3<f32>) -> Sdf {
     return res;
 }
 
-fn op_extrude(z: f32, dist2d: f32, h: f32) -> f32 {
-    let w = vec2<f32>(dist2d, abs(z) - h);
+fn sdf(pos: vec3<f32>, start: u32) -> f32 {
+    if shape_data[start] != 0 || shape_data[start+1] != 1 {
+        return 1e9;
+    }
+
+    let shape_kind = shape_data[start+2];
+    let offset = start + 4;
+
+    if shape_kind == 0 { // Sphere
+        return sd_sphere(pos, bitcast<f32>(shape_data[offset]));
+    } else if shape_kind == 1 { // Capsule
+        return 1e9; // TODO
+    } else if shape_kind == 2 { // Cylinder
+        return sd_cylinder(pos, bitcast<f32>(shape_data[offset]), bitcast<f32>(shape_data[offset+1]));
+    } else if shape_kind == 3 { // Cuboid
+        let x = bitcast<f32>(shape_data[offset]);
+        let y = bitcast<f32>(shape_data[offset + 1]);
+        let z = bitcast<f32>(shape_data[offset + 2]);
+        return sd_cuboid(pos, vec3<f32>(x, y, z));
+    } else if shape_kind == 4 { // Extruded
+        let half_height = bitcast<f32>(shape_data[offset]);
+        let extruded_kind = shape_data[offset+1];
+        return sd_extrude(pos, half_height, extruded_kind, offset+2);
+    }
+    return 1e9;
+}
+
+fn sd_sphere(pos: vec3<f32>, radius: f32) -> f32 {
+    return length(pos) - radius;
+}
+
+fn sd_cylinder(pos: vec3<f32>, half_height: f32, radius: f32) -> f32 {
+    let d = abs(vec2<f32>(length(pos.xz), pos.y)) - vec2<f32>(radius, half_height);
+    return min(max(d.x, d.y), 0.0) + length(max(d, vec2<f32>(0.)));
+}
+
+fn sd_cuboid(pos: vec3<f32>, bounds: vec3<f32>) -> f32 {
+    let q = abs(pos) - bounds;
+    return length(max(q, vec3<f32>(0.))) + min(max(q.x, max(q.y, q.z)), 0.);
+}
+
+fn sd_extrude(pos: vec3<f32>, half_height: f32, shape_kind: u32, offset: u32) -> f32 {
+    let d = sdf2d(pos.xz, shape_kind, offset);
+    let w = vec2<f32>(d, abs(pos.y) - half_height);
+
     return min(max(w.x, w.y), 0.) + length(max(w, vec2<f32>(0.)));
 }
-
-fn sd_plane(pos: vec3<f32>) -> f32 {
-    return dot(pos, vec3<f32>(0., 1., 0.));
-}
-
-fn sd_sphere(pos: vec3<f32>, r: f32) -> f32 {
-    return length(pos) - r;
-}
-
-fn sd_moon(pos: vec2<f32>, d: f32, ra: f32, rb: f32) -> f32 {
-    var p = vec2<f32>(pos.x, abs(pos.y));
-    let a = (ra*ra - rb*rb + d*d) / (2.*d);
-    let b = sqrt(max(ra*ra - a*a, 0.));
-    if d * (p.x*b - p.y*a) > d*d * max(b-p.y, 0.) {
-        return length(p - vec2<f32>(a, b));
+fn sdf2d(pos: vec2<f32>, shape_kind: u32, offset: u32) -> f32 {
+    if shape_kind == 3 {
+        let radius = bitcast<f32>(shape_data[offset]);
+        let thickness = bitcast<f32>(shape_data[offset+1]);
+        let segment = bitcast<f32>(shape_data[offset+2]);
+        return sd_arc(pos, radius, thickness, segment);
     }
-    return max(length(p) - ra, -(length(p - vec2<f32>(d, 0.)) - rb));
+
+    return 1e9;
+}
+
+fn sd_arc(pos: vec2<f32>, radius: f32, thickness: f32, segment: f32) -> f32 {
+    let sc = vec2<f32>(sin(segment), cos(segment));
+    let p = vec2<f32>(abs(pos.x), pos.y);
+    if sc.y * p.x > sc.x * p.y {
+        let w = p - radius * sc;
+        let l = length(w);
+        return l - thickness;
+    } else {
+        let l = length(pos);
+        let w = l - radius;
+        return abs(w) - thickness;
+    }
 }

@@ -192,11 +192,22 @@ fn upload_new_buffers<Material: MarcherMaterial>(
             let index = (index.to_bits() & (u32::MAX as u64)) as usize;
             let start_offset = (sdf_buffer.len() / 4) as u32;
 
+            if !sdf.operations.is_empty() {
+                warn!("SDF operations are not supported");
+                continue;
+            }
+
+            // TODO: Change SDF trees to be stored in a better format that can be
+            //       sent to the GPU directly
             sdf.to_buffer(&mut sdf_buffer);
 
             while index >= sdf_indices.len() {
                 sdf_indices.push(0);
             }
+            eprintln!(
+                "- Added shape {:?} with start offset: {:?}",
+                index, start_offset
+            );
             sdf_indices[index] = start_offset;
         }
 
@@ -226,7 +237,7 @@ fn upload_new_buffers<Material: MarcherMaterial>(
                 continue;
             };
             let index = (index.to_bits() & (u32::MAX as u64)) as usize;
-            let start_offset = (mats_buffer.len() / 4) as u32;
+            let start_offset = mats_buffer.len() as u32;
 
             mats_buffer.push(mat.clone());
 
@@ -697,8 +708,8 @@ fn setup(
     // moon3.dist = op_extrude(pos.y + 2.1, moon3_2d, 0.3) - 0.03;
     // moon3.mat = 1u;
 
-    let sphere = sdfs.add(Sdf3d::from(Sphere::default()));
-    let center_material = mats.add(SdfMaterial {
+    let cube = sdfs.add(Sdf3d::from(Cuboid::default()));
+    let cube_material = mats.add(SdfMaterial {
         base_color: LinearRgba::BLACK.to_vec3(),
         emissive: LinearRgba::rgb(0., 1.8, 2.).to_vec3(),
         reflective: 0.,
@@ -706,10 +717,11 @@ fn setup(
 
     commands.spawn((
         TransformBundle::from_transform(Transform::from_xyz(0., -0.5, -10.)),
-        sphere.clone(),
-        center_material,
+        cube,
+        cube_material,
     ));
 
+    let sphere = sdfs.add(Sdf3d::from(Sphere::default()));
     let sphere_material = mats.add(SdfMaterial {
         base_color: LinearRgba::gray(0.7).to_vec3(),
         emissive: LinearRgba::BLACK.to_vec3(),

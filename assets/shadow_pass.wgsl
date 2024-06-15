@@ -9,8 +9,7 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
 
     if res.distance < 0.05 {
         let traveled = res.traveled + res.distance;
-        let depth = (settings.far - traveled) / (settings.far - settings.near);
-        return vec4<f32>(vec3<f32>(1. / depth), 1.);
+        return vec4<f32>(vec3<f32>(settings.near / traveled), 1.);
     }
 
     return vec4<f32>(1.);

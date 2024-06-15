@@ -1,5 +1,6 @@
 #import "ray_marcher.wgsl"::{march_ray, MarchSettings, get_initial_settings, settings, calc_normal, get_occlusion};
 #import "ray_marcher.wgsl"::{shape_data, instance_data};
+#import bevy_pbr::view_transformations::view_z_to_depth_ndc;
 
 @group(1) @binding(0) var depth_texture: texture_storage_2d<r32float, write>;
 @group(1) @binding(1) var color_texture: texture_storage_2d<rgba16float, write>;
@@ -34,22 +35,22 @@ fn march(
             let coords = invocation_id.xy * 8 + vec2<u32>(x, y);
             let out = march_single(uv + vec2<f32>(f32(x), f32(y)) * pixel_factor);
 
-            textureStore(depth_texture, coords, vec4<f32>(out.w / settings.far, 0., 0., 0.));
+            textureStore(depth_texture, coords, vec4<f32>(settings.near / out.w, 0., 0., 0.));
             textureStore(color_texture, coords, vec4<f32>(out.rgb, 1.));
         }
     }
 }
 
 fn march_single(uv: vec2<f32>) -> vec4<f32> {
-    let march = get_initial_settings(uv);
-
+    var march = get_initial_settings(uv);
+    march.origin += vec3<f32>(0., 0., sin(settings.t * 0.4) * 12.);
     let res = march_ray(march);
 
     let c = cos(settings.t / 2. % 6.35);
     let s = sin(settings.t / 2. % 6.35);
     let light_dir = normalize(vec3<f32>(s, 0.7, c));
 
-    if res.distance < 0.1 {
+    if res.distance < 0.05 {
         let hit = march.origin + march.direction * (res.traveled - 0.01);
         let normal = calc_normal(hit);
         var diffuse = max(dot(normal, light_dir), 0.);
