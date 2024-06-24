@@ -49,7 +49,7 @@ impl Plugin for MainPassPlugin {
                 prepare_bind_group.in_set(RenderSet::PrepareBindGroups),
             )
             .add_render_graph_node::<ViewNodeRunner<MarcherMainPass>>(Core3d, MarcherMainPass)
-            .add_render_graph_edges(Core3d, (MarcherMainPass, Node3d::EndPrepasses));
+            .add_render_graph_edges(Core3d, (MarcherMainPass, Node3d::StartMainPass));
     }
 
     fn finish(&self, app: &mut App) {
@@ -113,7 +113,7 @@ impl MarcherMainTextures {
     }
 }
 
-const SIZE: (u32, u32) = (720, 720);
+const SIZE: (u32, u32) = (1280, 720);
 
 #[derive(RenderLabel, Clone, PartialEq, Eq, Hash, Default, Debug)]
 pub struct MarcherMainPass;

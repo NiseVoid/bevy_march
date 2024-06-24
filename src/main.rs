@@ -22,6 +22,9 @@ use shadow_pass::{MarcherShadowSettings, MarcherShadowTextures};
 mod settings;
 use settings::SettingsPlugin;
 
+mod writeback;
+use writeback::WritebackPlugin;
+
 pub trait MarcherMaterial: Asset + ShaderType + WriteInto + std::fmt::Debug + Clone {}
 
 /// It is generally encouraged to set up post processing effects as a plugin
@@ -39,6 +42,7 @@ impl<Material: MarcherMaterial> Plugin for RayMarcherPlugin<Material> {
                 BufferPlugin::<Material>::default(),
                 MainPassPlugin,
                 SettingsPlugin,
+                WritebackPlugin,
             ));
     }
 }
