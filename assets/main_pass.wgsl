@@ -25,15 +25,20 @@ fn march(
     @builtin(global_invocation_id) invocation_id: vec3<u32>,
     @builtin(num_workgroups) num_workgroups: vec3<u32>,
 ) {
-    let pixel_factor = 1. / vec2<f32>(num_workgroups.xy * 8 * 8);
-    let uv = vec2<f32>(invocation_id.xy) / vec2<f32>(num_workgroups.xy * 8);
+    var size = textureDimensions(color_texture);
+    let pixel_factor = 1. / vec2<f32>(size);
+    let position = invocation_id.xy * 8;
+
+    if position.x >= size.x || position.y >= size.y {
+        return;
+    }
+    let n = min(size - position, vec2<u32>(8, 8));
 
     // TODO: Cone march as an early pass
-    for (var x = 0u; x < 8; x++) {
-        for (var y = 0u; y < 8; y++) {
-            // TODO: Early out fot all pixels that are outside the texture
-            let coords = invocation_id.xy * 8 + vec2<u32>(x, y);
-            let out = march_single(uv + vec2<f32>(f32(x), f32(y)) * pixel_factor);
+    for (var x = 0u; x < n.x; x++) {
+        for (var y = 0u; y < n.y; y++) {
+            let coords = position + vec2<u32>(x, y);
+            let out = march_single(vec2<f32>(coords) * pixel_factor);
 
             textureStore(depth_texture, coords, vec4<f32>(settings.near / out.w, 0., 0., 0.));
             textureStore(color_texture, coords, vec4<f32>(out.rgb, 1.));
@@ -43,7 +48,6 @@ fn march(
 
 fn march_single(uv: vec2<f32>) -> vec4<f32> {
     var march = get_initial_settings(uv);
-    march.origin += vec3<f32>(0., 0., sin(settings.t * 0.4) * 12.);
     let res = march_ray(march);
 
     let c = cos(settings.t / 2. % 6.35);

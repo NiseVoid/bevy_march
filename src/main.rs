@@ -27,6 +27,15 @@ use writeback::WritebackPlugin;
 
 pub trait MarcherMaterial: Asset + ShaderType + WriteInto + std::fmt::Debug + Clone {}
 
+#[derive(Component, Deref, DerefMut)]
+pub struct MarcherScale(pub u8);
+
+impl Default for MarcherScale {
+    fn default() -> Self {
+        Self(1)
+    }
+}
+
 /// It is generally encouraged to set up post processing effects as a plugin
 #[derive(Default)]
 struct RayMarcherPlugin<Material: MarcherMaterial> {
@@ -80,40 +89,43 @@ fn setup(
     mut sdfs: ResMut<Assets<Sdf3d>>,
     mut mats: ResMut<Assets<SdfMaterial>>,
 ) {
-    let main_textures = MarcherMainTextures::new(&mut images);
-    let shadow_textures = MarcherShadowTextures::new(&mut images);
-
+    // Spawn some meshes to test interaction with raymarcher
     let mesh = meshes.add(Plane3d::new(Vec3::Z, Vec2::ONE));
+    let mat = std_mats.add(StandardMaterial::from(Color::srgb(1., 0.5, 0.5)));
 
-    // Color plane
+    // Plane 1
     commands.spawn(PbrBundle {
         mesh: mesh.clone(),
-        material: std_mats.add(StandardMaterial {
-            base_color_texture: Some(main_textures.color.clone()),
-            ..default()
-        }),
+        material: mat.clone(),
+        transform: Transform::from_xyz(0.5, 0., -5.).with_scale(Vec3::splat(2.2)),
         ..default()
     });
 
-    // Depth plane
+    // Plane 2
     commands.spawn(PbrBundle {
         mesh: mesh.clone(),
-        material: std_mats.add(StandardMaterial {
-            base_color_texture: Some(main_textures.depth.clone()),
-            ..default()
-        }),
-        transform: Transform::from_xyz(2., 0., 0.),
+        material: mat.clone(),
+        transform: Transform::from_xyz(4., 1.5, 0.),
         ..default()
     });
 
-    // Shadow plane
+    let mesh = meshes.add(Sphere::default().mesh().ico(3).unwrap());
+
+    // Sphere
     commands.spawn(PbrBundle {
         mesh,
-        material: std_mats.add(StandardMaterial {
-            base_color_texture: Some(shadow_textures.shadow_map.clone()),
-            ..default()
-        }),
-        transform: Transform::from_xyz(1., 2., 0.),
+        material: mat.clone(),
+        transform: Transform::from_xyz(1.5, -1., 0.),
+        ..default()
+    });
+
+    let mesh = meshes.add(Cuboid::default());
+
+    // Cube
+    commands.spawn(PbrBundle {
+        mesh,
+        material: mat.clone(),
+        transform: Transform::from_xyz(5., -1., -5.),
         ..default()
     });
 
@@ -129,7 +141,8 @@ fn setup(
             ..default()
         },
         MarcherSettings::default(),
-        main_textures,
+        MarcherMainTextures::new(&mut images, (8, 8)),
+        MarcherScale(2),
         BloomSettings {
             intensity: 0.5,
             composite_mode: bevy::core_pipeline::bloom::BloomCompositeMode::Additive,
@@ -154,7 +167,7 @@ fn setup(
             ..default()
         },
         MarcherShadowSettings::default(),
-        shadow_textures,
+        MarcherShadowTextures::new(&mut images),
     ));
 
     // TODO: Spawn moons

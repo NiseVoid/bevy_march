@@ -1,6 +1,6 @@
 use crate::{
     buffers::{BufferSet, Instance, MaterialSize},
-    BLOCK_SIZE,
+    MarcherScale, BLOCK_SIZE,
 };
 
 use std::borrow::Cow;
@@ -10,6 +10,7 @@ use bevy::{
     ecs::query::QueryItem,
     prelude::*,
     render::{
+        camera::RenderTarget,
         extract_component::{
             ComponentUniforms, ExtractComponent, ExtractComponentPlugin, UniformComponentPlugin,
         },
@@ -31,6 +32,7 @@ use bevy::{
         texture::GpuImage,
         Render, RenderApp, RenderSet,
     },
+    window::{PrimaryWindow, WindowRef, WindowResized},
 };
 
 pub struct MainPassPlugin;
@@ -41,7 +43,8 @@ impl Plugin for MainPassPlugin {
             ExtractComponentPlugin::<MarcherSettings>::default(),
             UniformComponentPlugin::<MarcherSettings>::default(),
             ExtractComponentPlugin::<MarcherMainTextures>::default(),
-        ));
+        ))
+        .add_systems(Last, resize_textures);
 
         app.sub_app_mut(RenderApp)
             .add_systems(
@@ -69,6 +72,7 @@ pub struct MarcherSettings {
     pub far: f32,
 }
 
+// TODO: Use gpu textures instead of Image handles?
 #[derive(Component, ExtractComponent, Clone)]
 pub struct MarcherMainTextures {
     pub depth: Handle<Image>,
@@ -76,11 +80,11 @@ pub struct MarcherMainTextures {
 }
 
 impl MarcherMainTextures {
-    pub fn new(images: &mut Assets<Image>) -> Self {
+    pub fn new(images: &mut Assets<Image>, size: (u32, u32)) -> Self {
         let mut depth = Image::new_fill(
             Extent3d {
-                width: SIZE.0,
-                height: SIZE.1,
+                width: size.0,
+                height: size.1,
                 depth_or_array_layers: 1,
             },
             TextureDimension::D2,
@@ -95,8 +99,8 @@ impl MarcherMainTextures {
 
         let mut color = Image::new_fill(
             Extent3d {
-                width: SIZE.0,
-                height: SIZE.1,
+                width: size.0,
+                height: size.1,
                 depth_or_array_layers: 1,
             },
             TextureDimension::D2,
@@ -113,7 +117,35 @@ impl MarcherMainTextures {
     }
 }
 
-const SIZE: (u32, u32) = (1280, 720);
+fn resize_textures(
+    mut resized: EventReader<WindowResized>,
+    mut textures: Query<(&Camera, &mut MarcherMainTextures, Option<&MarcherScale>)>,
+    windows: Query<&Window>,
+    primary_window: Query<&Window, With<PrimaryWindow>>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    if resized.read().last().is_none() {
+        return;
+    }
+
+    for (camera, mut textures, scale) in textures.iter_mut() {
+        let RenderTarget::Window(window) = camera.target else {
+            continue;
+        };
+        let Some(window) = (match window {
+            WindowRef::Primary => primary_window.get_single().ok(),
+            WindowRef::Entity(e) => windows.get(e).ok(),
+        }) else {
+            continue;
+        };
+
+        let scale = scale.map(|s| **s).unwrap_or(1) as u32;
+        let new_width = window.physical_width() / scale;
+        let new_height = window.physical_height() / scale;
+
+        *textures = MarcherMainTextures::new(&mut images, (new_width, new_height));
+    }
+}
 
 #[derive(RenderLabel, Clone, PartialEq, Eq, Hash, Default, Debug)]
 pub struct MarcherMainPass;
@@ -135,7 +167,6 @@ impl ViewNode for MarcherMainPass {
             return Ok(());
         };
 
-        // Get the settings uniform binding
         let settings_uniforms = world.resource::<ComponentUniforms<MarcherSettings>>();
         let Some(settings_binding) = settings_uniforms.uniforms().binding() else {
             return Ok(());
@@ -144,10 +175,7 @@ impl ViewNode for MarcherMainPass {
         let settings_bind_group = render_context.render_device().create_bind_group(
             "marcher_settings_bind_group",
             &ray_marcher_pipeline.settings_layout,
-            &BindGroupEntries::sequential((
-                // TODO: Pass in shapes
-                settings_binding.clone(),
-            )),
+            &BindGroupEntries::sequential((settings_binding.clone(),)),
         );
 
         let mut pass = render_context
@@ -155,9 +183,13 @@ impl ViewNode for MarcherMainPass {
             .begin_compute_pass(&ComputePassDescriptor::default());
 
         pass.set_bind_group(0, &settings_bind_group, &[]);
-        pass.set_bind_group(1, &texture_bind_group.0, &[]);
+        pass.set_bind_group(1, &texture_bind_group.bind_group, &[]);
         pass.set_pipeline(pipeline);
-        pass.dispatch_workgroups(SIZE.0.div_ceil(BLOCK_SIZE), SIZE.1.div_ceil(BLOCK_SIZE), 1);
+        pass.dispatch_workgroups(
+            texture_bind_group.size.x.div_ceil(BLOCK_SIZE),
+            texture_bind_group.size.y.div_ceil(BLOCK_SIZE),
+            1,
+        );
 
         Ok(())
     }
@@ -165,7 +197,10 @@ impl ViewNode for MarcherMainPass {
 
 // TODO: Split data shared between passes and data that's unique to each pass
 #[derive(Component)]
-pub struct MarcherStorageBindGroup(BindGroup);
+pub struct MarcherStorageBindGroup {
+    bind_group: BindGroup,
+    size: UVec2,
+}
 
 fn prepare_bind_group(
     mut commands: Commands,
@@ -175,10 +210,13 @@ fn prepare_bind_group(
     buffer_set: Res<BufferSet>,
     render_device: Res<RenderDevice>,
 ) {
-    // TODO: Swap buffers if new ones are available, and drop old ones if necessary
     for (entity, textures) in textures.iter() {
-        let depth = gpu_images.get(textures.depth.id()).unwrap();
-        let color = gpu_images.get(textures.color.id()).unwrap();
+        let Some(color) = gpu_images.get(textures.color.id()) else {
+            continue;
+        };
+        let Some(depth) = gpu_images.get(textures.depth.id()) else {
+            continue;
+        };
         let bind_group = render_device.create_bind_group(
             None,
             &pipeline.storage_layout,
@@ -190,9 +228,10 @@ fn prepare_bind_group(
                 buffer_set.instances.as_entire_binding(),
             )),
         );
-        commands
-            .entity(entity)
-            .insert(MarcherStorageBindGroup(bind_group));
+        commands.entity(entity).insert(MarcherStorageBindGroup {
+            bind_group,
+            size: color.size,
+        });
     }
 }
 

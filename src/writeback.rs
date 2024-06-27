@@ -33,6 +33,7 @@ pub struct WritebackPlugin;
 impl Plugin for WritebackPlugin {
     fn build(&self, app: &mut App) {
         app.sub_app_mut(RenderApp)
+            .add_systems(Render, update_pipeline.in_set(RenderSet::PrepareAssets))
             .add_systems(
                 Render,
                 prepare_bind_group.in_set(RenderSet::PrepareBindGroups),
@@ -78,6 +79,8 @@ impl ViewNode for MarcherWriteback {
         };
         let depth_stencil_attachment = Some(depth.get_attachment(StoreOp::Store));
 
+        // TODO: We can get the prepass textures from ViewPrepassTextures and use it to write to the depth prepass
+
         let mut render_pass = render_context.begin_tracked_render_pass(RenderPassDescriptor {
             label: Some("marcher_writeback"),
             color_attachments: &[Some(view_target.get_color_attachment())],
@@ -105,8 +108,13 @@ fn prepare_bind_group(
     render_device: Res<RenderDevice>,
 ) {
     for (entity, textures) in textures.iter() {
-        let color = gpu_images.get(textures.color.id()).unwrap();
-        let depth = gpu_images.get(textures.depth.id()).unwrap();
+        // TODO: Render previous textures if the current ones can't be found
+        let Some(color) = gpu_images.get(textures.color.id()) else {
+            continue;
+        };
+        let Some(depth) = gpu_images.get(textures.depth.id()) else {
+            continue;
+        };
         let bind_group = render_device.create_bind_group(
             None,
             &pipeline.layout,
@@ -122,6 +130,16 @@ fn prepare_bind_group(
     }
 }
 
+fn update_pipeline(mut commands: Commands, msaa: Res<Msaa>) {
+    if !msaa.is_changed() {
+        return;
+    }
+
+    // TODO: We're probably leaking pipelines here?
+    commands.remove_resource::<WritebackPipeline>();
+    commands.init_resource::<WritebackPipeline>();
+}
+
 #[derive(Resource)]
 struct WritebackPipeline {
     layout: BindGroupLayout,
@@ -131,6 +149,10 @@ struct WritebackPipeline {
 
 impl FromWorld for WritebackPipeline {
     fn from_world(world: &mut World) -> Self {
+        let msaa_count = world
+            .get_resource::<Msaa>()
+            .map(|m| m.samples())
+            .unwrap_or(1);
         let render_device = world.resource::<RenderDevice>();
 
         // We need to define the bind group layout used for our pipeline
@@ -190,9 +212,8 @@ impl FromWorld for WritebackPipeline {
                             clamp: 0.,
                         },
                     }),
-                    // TODO: Match the main pass?
                     multisample: MultisampleState {
-                        count: 4,
+                        count: msaa_count,
                         mask: !0,
                         alpha_to_coverage_enabled: false,
                     },
