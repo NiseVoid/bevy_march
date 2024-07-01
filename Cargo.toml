@@ -23,6 +23,9 @@ bevy = {version = "0.14.0-rc.2", default-features = false, features = [
   "bevy_winit",
   "tonemapping_luts",
   "file_watcher",
+  "bevy_sprite",
+  "bevy_text",
+  "default_font",
 
   # Formats
   "ktx2",

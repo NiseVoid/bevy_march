@@ -27,17 +27,19 @@ struct MarchSettings {
     direction: vec3<f32>,
     start: f32,
     limit: f32,
+    ignored: u32,
 }
 
 fn get_initial_settings(screen_uv: vec2<f32>) -> MarchSettings {
     var march_uv = 1. - screen_uv * 2.;
-    march_uv.x *= settings.aspect_ratio;
+    march_uv.x *= -settings.aspect_ratio;
 
     var march: MarchSettings;
     march.origin = settings.origin;
     march.direction = settings.rotation * normalize(vec3<f32>(march_uv, -settings.perspective_factor));
     march.start = settings.near;
     march.limit = settings.far;
+    march.ignored = 999999999u;
     return march;
 }
 
@@ -53,8 +55,8 @@ fn march_ray(march: MarchSettings) -> MarchResult {
     var res: Sdf;
     for (var i = 0u; i < 128u; i++) {
         let pos = march.origin + march.direction * traveled;
-        res = get_scene_dist(pos);
-        if traveled > march.limit || res.dist < max(traveled * 0.001, 0.001) {
+        res = get_scene_dist(pos, march.ignored);
+        if traveled > march.limit || res.dist < clamp(traveled * 0.001, 0.001, 0.02) {
             break;
         }
 
@@ -78,7 +80,7 @@ fn get_occlusion(point: vec3<f32>, normal: vec3<f32>) -> f32 {
         let step = f32(i);
         let from_point = step * step_dist;
         let pos = point + normal * from_point;
-        let res = get_scene_dist(pos);
+        let res = get_scene_dist(pos, 999999999u);
 
         occlusion -= saturate(from_point - res.dist) / step;
     }
@@ -90,9 +92,9 @@ fn calc_normal(p: vec3<f32>) -> vec3<f32> {
     let eps = 0.0001;
     let h = vec2<f32>(eps, 0.);
     return normalize(vec3<f32>(
-        get_scene_dist(p+h.xyy).dist - get_scene_dist(p - h.xyy).dist,
-        get_scene_dist(p+h.yxy).dist - get_scene_dist(p - h.yxy).dist,
-        get_scene_dist(p+h.yyx).dist - get_scene_dist(p - h.yyx).dist,
+        get_scene_dist(p+h.xyy, 999999999u).dist - get_scene_dist(p - h.xyy, 999999999u).dist,
+        get_scene_dist(p+h.yxy, 999999999u).dist - get_scene_dist(p - h.yxy, 999999999u).dist,
+        get_scene_dist(p+h.yyx, 999999999u).dist - get_scene_dist(p - h.yyx, 999999999u).dist,
     ));
 }
 
@@ -108,15 +110,23 @@ fn sdf_min(a: Sdf, b: Sdf) -> Sdf {
     return b;
 }
 
-fn get_scene_dist(pos: vec3<f32>) -> Sdf {    
+fn get_scene_dist(pos: vec3<f32>, ignored: u32) -> Sdf {
     var res: Sdf;
-    res.dist = 1e9;
+    if ignored != 50000u {
+        res.dist = dot(pos, vec3<f32>(0., 1., 0.)) + 2.25;
+        res.mat = 50000u;
+    } else {
+        res.dist = 1e9;
+    }
     let instance_count = arrayLength(&instances);
     if instance_count == 0 {
         return res;
     }
 
     for (var i = 0u; i < instance_count; i++) {
+        if i == ignored {
+            continue;
+        }
         let instance = instances[i];
         // TODO: Encode the `/ instance.scale` in the matrix
         let relative_pos = instance.matrix * (pos - instance.translation);

@@ -54,12 +54,19 @@ fn march_single(uv: vec2<f32>) -> vec4<f32> {
     let s = sin(settings.t / 2. % 6.35);
     let light_dir = normalize(vec3<f32>(s, 0.7, c));
 
+    if res.traveled > 50. {
+        return vec4<f32>(skybox(march.direction), settings.far);
+    }
     if res.distance < 0.05 {
         let hit = march.origin + march.direction * (res.traveled - 0.01);
         let normal = calc_normal(hit);
         var diffuse = max(dot(normal, light_dir), 0.);
 
-        let material = materials[res.material];
+        var material = materials[res.material];
+        if res.material == 50000 {
+            material.reflective = 0.97;
+            material.base_color = vec3<f32>(0.5, 1., 0.5);
+        }
         var albedo = material.base_color;
         var emission = material.emissive;
         if material.reflective > 0.01 {
@@ -67,9 +74,10 @@ fn march_single(uv: vec2<f32>) -> vec4<f32> {
             let base_color = base_strength * material.base_color;
 
             var reflected: MarchSettings;
-            reflected.origin = hit;
+            reflected.origin = march.origin + march.direction * res.traveled;
             reflected.direction = reflect(march.direction, normal);
             reflected.limit = settings.far - res.traveled;
+            reflected.ignored = 50000u;
             let res = march_ray(reflected);
             let refl_mat = materials[res.material];
             if res.distance < 0.1 {
@@ -86,10 +94,10 @@ fn march_single(uv: vec2<f32>) -> vec4<f32> {
         let ao = get_occlusion(march.origin + march.direction * res.traveled, normal);
         let light = max(diffuse, ao * 0.4);
         let color = max(emission, vec3<f32>(albedo * light));
-        if res.traveled > 40. {
-            let factor = min((res.traveled - 40.) / 40., 1.);
+        if res.traveled > 35. {
+            let factor = min((res.traveled - 35.) / 15., 1.);
             return vec4<f32>(
-                factor * skybox(march.direction) + (1. - factor) * color,
+                (1. - factor) * color,
                 res.traveled + res.distance
             );
         }
@@ -100,33 +108,43 @@ fn march_single(uv: vec2<f32>) -> vec4<f32> {
 }
 
 fn skybox(direction: vec3<f32>) -> vec3<f32> {
-    let angle = atan(direction.x / direction.z);
-    let angle2 = atan(direction.y / direction.z);
-    let angles = vec2<f32>(angle, angle2);
-    let uv = fract(angles) % 0.1 * 10. - 0.5;
-    let cell = vec2<f32>(floor(angle * 10.), floor(angle2 * 10.));
+    let sphere_uv = healpix(direction);
+    let cell = floor(sphere_uv * 5.);
+    let uv = (sphere_uv - cell * 0.2) * 5. - 0.5;
 
     var dist = 999.;
     for (var i = 0; i < 4; i++) {
         let relative = vec2<f32>(f32(i) % 2. * 2. - 1., 2. * floor(f32(i) * 0.5) - 1.);
         let pos = uv - relative * 0.5;
         let origin = hash2(cell * 2. + relative) - 0.5;
-        let corner_dist = sd_star(pos - origin, 0.07, 4u, 3.);
+        let corner_dist = sd_star(pos - origin, 0.03, 4u, 3.);
         dist = min(dist, corner_dist);
     }
 
-    let star = -sign(dist) * 2.4;
+    let star = -sign(dist) * 2.;
 
-    let noise = perlinNoise2(angles * 4.);
-    let noise2 = perlinNoise2(angles * 4. + 12);
+    let noise = perlinNoise2(sphere_uv * 2.);
 
     let background = vec3<f32>(
-        noise * 0.1 + 0.9,
-        0.3,
-        noise2 * 0.2 + 0.9,
+        0.,
+        0.,
+        noise * 0.005,
     );
 
     return max(background, vec3<f32>(star));
+}
+
+// From https://www.shadertoy.com/view/4sjXW1
+fn healpix(p: vec3<f32>) -> vec2<f32> {
+    let a = atan(p.x / p.z) * 0.63662;
+    let h = 3.*abs(p.y);
+    var h2 = .75*p.y;
+    var uv = vec2<f32>(a + h2, a - h2);
+    h2 = sqrt(3. - h);
+    let a2 = h2 * fract(a);
+    uv = mix(uv, vec2(-h2 + a2, a2), step(2., h));
+
+    return uv;
 }
 
 fn sd_star(pos: vec2<f32>, r: f32, n: u32, m: f32) -> f32 {

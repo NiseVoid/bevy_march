@@ -130,7 +130,6 @@ fn upload_new_buffers<Material: MarcherMaterial>(
     let mut new_set = None;
 
     if sdfs.is_added() || sdf_events.read().last().is_some() {
-        info!("Updating SDF buffer");
         sdf_indices.clear();
         let mut sdf_buffer: Vec<u8> = Vec::with_capacity(buffers.current.sdfs.size() as usize);
         for (id, sdf) in sdfs.iter() {
@@ -153,10 +152,6 @@ fn upload_new_buffers<Material: MarcherMaterial>(
             while index >= sdf_indices.len() {
                 sdf_indices.push(0);
             }
-            eprintln!(
-                "- Added shape {:?} with start offset: {:?}",
-                index, start_offset
-            );
             sdf_indices[index] = start_offset;
         }
 
@@ -177,7 +172,6 @@ fn upload_new_buffers<Material: MarcherMaterial>(
     }
 
     if mats.is_added() || mat_events.read().last().is_some() {
-        info!("Updating materials buffer");
         mat_indices.clear();
         let mut mats_buffer = BufferVec::<Material>::new(BufferUsages::STORAGE);
         for (id, mat) in mats.iter() {
@@ -208,8 +202,6 @@ fn upload_new_buffers<Material: MarcherMaterial>(
     if new_set.is_none() && changed_query.is_empty() {
         return;
     }
-
-    info!("Buffers or transforms changed, rebuilding instance buffer",);
 
     let mut instance_buffer = BufferVec::<Instance>::new(BufferUsages::STORAGE);
     for (sdf, mat, transform) in instances.iter() {
@@ -261,8 +253,6 @@ fn upload_new_buffers<Material: MarcherMaterial>(
         let translation = transform.translation();
         let rotation = matrix * inv_scale;
 
-        info!("Instance: {:?} {:?} {:?}", translation, rotation, scale);
-
         instance_buffer.push(Instance {
             sdf_index,
             mat_index,
@@ -286,20 +276,15 @@ fn extract_buffers(buffers: Extract<Res<Buffers>>, mut extracted: ResMut<BufferS
         return;
     };
 
-    info!("Replacing buffers: {:?}", *extracted);
     if new_buffers.sdfs.id() != extracted.sdfs.id() {
-        info!("- Destroying sdf buffer");
         extracted.sdfs.destroy();
     }
     if new_buffers.materials.id() != extracted.materials.id() {
-        info!("- Destroying material buffer");
         extracted.materials.destroy();
     }
     if new_buffers.instances.id() != extracted.instances.id() {
-        info!("- Destroying instance buffer");
         extracted.instances.destroy();
     }
 
     *extracted = (*new_buffers).clone();
-    info!("- New buffers: {:?}", *extracted);
 }

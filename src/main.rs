@@ -2,9 +2,13 @@ use std::marker::PhantomData;
 
 use bevy::{
     core_pipeline::bloom::BloomSettings,
+    diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
+    input::mouse::MouseMotion,
     math::vec3,
     prelude::*,
     render::render_resource::{encase::internal::WriteInto, *},
+    sprite::Anchor,
+    window::CursorGrabMode,
 };
 use bevy_prototype_sdf::Sdf3d;
 
@@ -67,8 +71,20 @@ const BLOCK_SIZE: u32 = WORKGROUP_SIZE * CONE_SIZE;
 fn main() {
     App::new()
         // TODO: Pass in shader handle for main pass
-        .add_plugins((DefaultPlugins, RayMarcherPlugin::<SdfMaterial>::default()))
+        .add_plugins((
+            DefaultPlugins.set::<WindowPlugin>(WindowPlugin {
+                primary_window: Some(Window {
+                    present_mode: bevy::window::PresentMode::AutoNoVsync,
+                    ..default()
+                }),
+                ..default()
+            }),
+            FrameTimeDiagnosticsPlugin,
+            RayMarcherPlugin::<SdfMaterial>::default(),
+        ))
+        .init_resource::<CursorState>()
         .add_systems(Startup, setup)
+        .add_systems(Update, ((grab_cursor, rotate_and_move).chain(), update_fps))
         .run();
 }
 
@@ -81,6 +97,11 @@ struct SdfMaterial {
 
 impl MarcherMaterial for SdfMaterial {}
 
+#[derive(Component)]
+struct FpsText;
+#[derive(Component)]
+struct HelpText;
+
 fn setup(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
@@ -89,6 +110,53 @@ fn setup(
     mut sdfs: ResMut<Assets<Sdf3d>>,
     mut mats: ResMut<Assets<SdfMaterial>>,
 ) {
+    fn text_style(size: f32, gray: f32) -> TextStyle {
+        TextStyle {
+            font: default(),
+            font_size: size,
+            color: Color::srgb(gray, gray, gray),
+        }
+    }
+    commands.spawn((
+        Text2dBundle {
+            text: Text {
+                sections: vec![
+                    TextSection::new("FPS: ", text_style(20., 0.7)),
+                    TextSection::new("?", text_style(20., 0.8)),
+                ],
+                ..default()
+            },
+            text_anchor: Anchor::TopLeft,
+            ..default()
+        },
+        FpsText,
+    ));
+    commands.spawn((
+        Text2dBundle {
+            text: Text {
+                sections: vec![TextSection::new(
+                    "Use WASD to move.\n\
+                    Space and Ctrl to go up and down.\n\
+                    Left click and Escape to lock and release the cursor",
+                    text_style(40., 1.),
+                )],
+                justify: JustifyText::Center,
+                ..default()
+            },
+            ..default()
+        },
+        HelpText,
+    ));
+    commands.spawn(Camera2dBundle {
+        camera: Camera {
+            order: 1,
+            hdr: true,
+            clear_color: ClearColorConfig::None,
+            ..default()
+        },
+        ..default()
+    });
+
     // Spawn some meshes to test interaction with raymarcher
     let mesh = meshes.add(Plane3d::new(Vec3::Z, Vec2::ONE));
     let mat = std_mats.add(StandardMaterial::from(Color::srgb(1., 0.5, 0.5)));
@@ -142,7 +210,7 @@ fn setup(
         },
         MarcherSettings::default(),
         MarcherMainTextures::new(&mut images, (8, 8)),
-        MarcherScale(2),
+        MarcherScale(1),
         BloomSettings {
             intensity: 0.5,
             composite_mode: bevy::core_pipeline::bloom::BloomCompositeMode::Additive,
@@ -189,7 +257,7 @@ fn setup(
     let cube = sdfs.add(Sdf3d::from(Cuboid::default()));
     let cube_material = mats.add(SdfMaterial {
         base_color: LinearRgba::BLACK.to_vec3(),
-        emissive: LinearRgba::rgb(0., 1.8, 2.).to_vec3(),
+        emissive: LinearRgba::rgb(0., 1.5, 1.75).to_vec3(),
         reflective: 0.,
     });
 
@@ -223,16 +291,120 @@ fn setup(
 
     // TODO
     // let water_plane = sdfs.add(Sdf3d::from(InfinitePlane3d::default()));
-    let water_material = mats.add(SdfMaterial {
-        base_color: LinearRgba::rgb(0., 0.3, 1.).to_vec3(),
-        emissive: LinearRgba::BLACK.to_vec3(),
-        reflective: 0.7,
-    });
-    std::mem::forget(water_material);
+    // let water_material = mats.add(SdfMaterial {
+    //     base_color: LinearRgba::rgb(0., 0.3, 1.).to_vec3(),
+    //     emissive: LinearRgba::BLACK.to_vec3(),
+    //     reflective: 0.7,
+    // });
 
     // commands.spawn((
     //     TransformBundle::from_transform(Transform::from_xyz(0., -2.25, 0.)),
     //     water_plane,
     //     water_material,
     // ));
+}
+
+fn update_fps(
+    window: Query<&Window>,
+    mut text: Query<(&mut Transform, &mut Text), With<FpsText>>,
+    diag_store: Res<DiagnosticsStore>,
+) {
+    let half_size = window
+        .get_single()
+        .map(|w| w.resolution.size() * 0.5)
+        .unwrap_or_default();
+    let Ok((mut transform, mut text)) = text.get_single_mut() else {
+        return;
+    };
+    let Some(fps) = diag_store.get(&FrameTimeDiagnosticsPlugin::FPS) else {
+        return;
+    };
+    let Some(fps) = fps.smoothed() else {
+        return;
+    };
+    transform.translation = Vec3::new(-half_size.x, half_size.y, 0.);
+    text.sections[1].value = format!("{:.1}", fps);
+}
+
+#[derive(Resource, Default, PartialEq, Eq)]
+enum CursorState {
+    #[default]
+    Free,
+    Locked,
+}
+
+fn grab_cursor(
+    mut windows: Query<&mut Window>,
+    keyboard_input: Res<ButtonInput<KeyCode>>,
+    mouse_input: Res<ButtonInput<MouseButton>>,
+    mut cursor_state: ResMut<CursorState>,
+    mut text: Query<&mut Visibility, With<HelpText>>,
+) {
+    let grabbed = if keyboard_input.just_pressed(KeyCode::Escape) {
+        false
+    } else if mouse_input.just_pressed(MouseButton::Left) {
+        true
+    } else {
+        return;
+    };
+
+    let Ok(mut window) = windows.get_single_mut() else {
+        return;
+    };
+    let Ok(mut help_vis) = text.get_single_mut() else {
+        return;
+    };
+
+    (window.cursor.grab_mode, *cursor_state, *help_vis) = if grabbed {
+        (
+            CursorGrabMode::Confined,
+            CursorState::Locked,
+            Visibility::Hidden,
+        )
+    } else {
+        (
+            CursorGrabMode::None,
+            CursorState::Free,
+            Visibility::Inherited,
+        )
+    };
+    window.cursor.visible = !grabbed;
+}
+
+fn rotate_and_move(
+    time: Res<Time>,
+    mut cameras: Query<&mut Transform, With<Camera3d>>,
+    keyboard_input: Res<ButtonInput<KeyCode>>,
+    mut mouse_motion: EventReader<MouseMotion>,
+    cursor_state: Res<CursorState>,
+) {
+    let rotation_input = -mouse_motion
+        .read()
+        .fold(Vec2::ZERO, |acc, mot| acc + mot.delta);
+    let movement_input = Vec3::new(
+        keyboard_input.pressed(KeyCode::KeyD) as u32 as f32
+            - keyboard_input.pressed(KeyCode::KeyA) as u32 as f32,
+        keyboard_input.pressed(KeyCode::Space) as u32 as f32
+            - keyboard_input.pressed(KeyCode::ControlLeft) as u32 as f32,
+        keyboard_input.pressed(KeyCode::KeyS) as u32 as f32
+            - keyboard_input.pressed(KeyCode::KeyW) as u32 as f32,
+    );
+
+    if rotation_input.length_squared() < 0.001 && movement_input.length_squared() < 0.001 {
+        return;
+    }
+
+    for mut transform in cameras.iter_mut() {
+        let translation = movement_input * time.delta_seconds() * 5.;
+        let translation = transform.rotation * translation;
+        transform.translation += translation;
+        transform.translation.y = transform.translation.y.max(-2.);
+
+        if *cursor_state == CursorState::Locked {
+            let mut euler = transform.rotation.to_euler(EulerRot::YXZ);
+            euler.0 += rotation_input.x * 0.003;
+            euler.1 += rotation_input.y * 0.003;
+            transform.rotation = Quat::from_euler(EulerRot::YXZ, euler.0, euler.1, 0.);
+        }
+    }
 }
