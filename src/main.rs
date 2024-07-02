@@ -60,8 +60,6 @@ impl<Material: MarcherMaterial> Plugin for RayMarcherPlugin<Material> {
     }
 }
 
-// TODO: Use resolution or a integer division of it instead of a hardcoded resolution
-
 const WORKGROUP_SIZE: u32 = 8;
 const CONE_SIZE: u32 = 8;
 const BLOCK_SIZE: u32 = WORKGROUP_SIZE * CONE_SIZE;
@@ -206,6 +204,10 @@ fn setup(
                 hdr: true,
                 ..default()
             },
+            projection: Projection::Perspective(PerspectiveProjection {
+                far: 200.,
+                ..default()
+            }),
             ..default()
         },
         MarcherSettings::default(),

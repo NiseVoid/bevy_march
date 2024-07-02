@@ -1,4 +1,3 @@
-
 struct RayMarcherSettings {
     origin: vec3<f32>,
     rotation: mat3x3<f32>,
@@ -30,13 +29,18 @@ struct MarchSettings {
     ignored: u32,
 }
 
-fn get_initial_settings(screen_uv: vec2<f32>) -> MarchSettings {
+fn get_ray_dir(screen_uv: vec2<f32>) -> vec3<f32> {
+    // TODO: Start with UVs in the right format instead
     var march_uv = 1. - screen_uv * 2.;
     march_uv.x *= -settings.aspect_ratio;
 
+    return settings.rotation * normalize(vec3<f32>(march_uv, -settings.perspective_factor));
+}
+
+fn get_initial_settings(screen_uv: vec2<f32>) -> MarchSettings {
     var march: MarchSettings;
     march.origin = settings.origin;
-    march.direction = settings.rotation * normalize(vec3<f32>(march_uv, -settings.perspective_factor));
+    march.direction = get_ray_dir(screen_uv);
     march.start = settings.near;
     march.limit = settings.far;
     march.ignored = 999999999u;
@@ -46,6 +50,7 @@ fn get_initial_settings(screen_uv: vec2<f32>) -> MarchSettings {
 struct MarchResult {
     traveled: f32,
     distance: f32,
+    steps: u32,
     material: u32,
 }
 
@@ -53,17 +58,21 @@ fn march_ray(march: MarchSettings) -> MarchResult {
     var traveled = march.start;
     var tint = vec3<f32>(1.);
     var res: Sdf;
-    for (var i = 0u; i < 128u; i++) {
+    var i: u32;
+    for (i = 0u; i < 128u; i++) {
         let pos = march.origin + march.direction * traveled;
         res = get_scene_dist(pos, march.ignored);
-        if traveled > march.limit || res.dist < clamp(traveled * 0.001, 0.001, 0.02) {
+
+        let epsilon = clamp(traveled * 0.001, 0.001, 0.02);
+        if traveled > march.limit || res.dist < epsilon {
             break;
         }
 
-        traveled += max(res.dist, max(traveled * 0.001, 0.01));
+        traveled += max(res.dist, epsilon);
     }
 
     var result: MarchResult;
+    result.steps = i;
     result.traveled = traveled;
     result.distance = res.dist;
     result.material = res.mat;

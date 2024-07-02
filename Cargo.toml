@@ -12,6 +12,11 @@ debug-assertions = true
 opt-level = 3
 debug-assertions = true
 
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
 [dependencies]
 bevy = {version = "0.14.0-rc.2", default-features = false, features = [
   "multi_threaded",
