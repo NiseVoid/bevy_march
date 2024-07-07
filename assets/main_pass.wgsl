@@ -108,7 +108,7 @@ fn march_single(uv: vec2<f32>, cone_travel: f32) -> vec4<f32> {
     let s = sin(settings.t / 2. % 6.35);
     let light_dir = normalize(vec3<f32>(s, 0.7, c));
 
-    if res.traveled > 50. {
+    if res.traveled > 80. {
         return vec4<f32>(skybox(march.direction), settings.far);
     }
     if res.distance < 0.05 {
@@ -148,8 +148,8 @@ fn march_single(uv: vec2<f32>, cone_travel: f32) -> vec4<f32> {
         let ao = get_occlusion(march.origin + march.direction * res.traveled, normal);
         let light = max(diffuse, ao * 0.4);
         let color = max(emission, vec3<f32>(albedo * light));
-        if res.traveled > 35. {
-            let factor = min((res.traveled - 35.) / 15., 1.);
+        if res.traveled > 50. {
+            let factor = min((res.traveled - 50.) / 30., 1.);
             return vec4<f32>(
                 (1. - factor) * color,
                 res.traveled + res.distance

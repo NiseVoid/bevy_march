@@ -13,8 +13,6 @@ struct FragmentOutput {
 fn fragment(in: FullscreenVertexOutput) -> FragmentOutput {
     var out: FragmentOutput;
     out.color = textureSample(color_texture, texture_sampler, in.uv);
-    // TODO: Use correct depth instead of reverse infinite Z?
     out.depth = textureSample(depth_texture, texture_sampler, in.uv).r;
-    // out.depth = 500.;
     return out;
 }

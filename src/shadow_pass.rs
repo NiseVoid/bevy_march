@@ -28,6 +28,7 @@ pub struct MarcherShadowArea {
 
 #[derive(Component, ExtractComponent, Clone)]
 pub struct MarcherShadowTextures {
+    #[allow(dead_code)]
     pub shadow_map: Handle<Image>,
 }
 
