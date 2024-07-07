@@ -6,7 +6,10 @@ use bevy::{
     input::mouse::MouseMotion,
     math::vec3,
     prelude::*,
-    render::render_resource::{encase::internal::WriteInto, *},
+    render::{
+        render_resource::{encase::internal::WriteInto, *},
+        renderer::RenderDevice,
+    },
     sprite::Anchor,
     window::CursorGrabMode,
 };
@@ -21,13 +24,13 @@ mod cone_pass;
 use cone_pass::{ConePassPlugin, MarcherConeTexture};
 
 mod main_pass;
-use main_pass::{MainPassPlugin, MarcherMainTextures, MarcherSettings};
+use main_pass::{MainPassPlugin, MarcherMainTextures};
 
 mod shadow_pass;
 use shadow_pass::{MarcherShadowSettings, MarcherShadowTextures};
 
 mod settings;
-use settings::SettingsPlugin;
+use settings::{MarcherSettings, SettingsPlugin};
 
 mod writeback;
 use writeback::WritebackPlugin;
@@ -110,6 +113,7 @@ fn setup(
     mut std_mats: ResMut<Assets<StandardMaterial>>,
     mut sdfs: ResMut<Assets<Sdf3d>>,
     mut mats: ResMut<Assets<SdfMaterial>>,
+    device: Res<RenderDevice>,
 ) {
     fn text_style(size: f32, gray: f32) -> TextStyle {
         TextStyle {
@@ -215,7 +219,7 @@ fn setup(
         },
         MarcherSettings::default(),
         MarcherMainTextures::new(&mut images, (8, 8)),
-        MarcherConeTexture::new(&mut images, (8, 8)),
+        MarcherConeTexture::new(&mut images, &device, (8, 8)),
         MarcherScale(1),
         BloomSettings {
             intensity: 0.5,

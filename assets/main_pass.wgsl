@@ -20,17 +20,13 @@ fn march(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
 }
 
 fn get_color(march: MarchSettings, res: MarchResult) -> vec3<f32> {
-    let c = cos(settings.t / 2. % 6.35);
-    let s = sin(settings.t / 2. % 6.35);
-    let light_dir = normalize(vec3<f32>(s, 0.7, c));
-
     if res.traveled >= 100. {
         return skybox(march.direction);
     }
 
     let hit = march.origin + march.direction * (res.traveled - 0.01);
     let normal = calc_normal(hit);
-    var diffuse = max(dot(normal, light_dir), 0.);
+    var diffuse = dot(normal, -settings.light_dir);
 
     var material = materials[res.material];
     if res.material == 50000 {
@@ -43,6 +39,7 @@ fn get_color(march: MarchSettings, res: MarchResult) -> vec3<f32> {
         let base_strength = (1. - material.reflective);
         let base_color = base_strength * material.base_color;
 
+        // TODO: Make reflections less boilerplate heavy
         var reflected: MarchSettings;
         reflected.origin = march.origin + march.direction * res.traveled;
         reflected.direction = reflect(march.direction, normal);
@@ -56,13 +53,17 @@ fn get_color(march: MarchSettings, res: MarchResult) -> vec3<f32> {
 
             let reflected_hit = hit + reflected.direction * (res.traveled - 0.01);
             let reflected_normal = calc_normal(reflected_hit);
-            diffuse = max(dot(reflected_normal, light_dir), 0.);
+            diffuse = max(dot(reflected_normal, -settings.light_dir), 0.);
         } else {
             albedo = base_color + skybox(reflected.direction) * material.reflective;
         }
     }
-    let ao = get_occlusion(march.origin + march.direction * res.traveled, normal);
-    let light = max(diffuse, ao * 0.4);
+    var ambient = 1.;
+    if diffuse <= 0. {
+        // TODO: When reflected, use final hit and normal for AO
+        let ambient = 1. - get_occlusion(march.origin + march.direction * res.traveled, normal);
+    }
+    let light = max(diffuse, ambient * 0.15);
     let color = max(emission, vec3<f32>(albedo * light));
     if res.traveled > 50. {
         let factor = min((res.traveled - 50.) / 50., 1.);

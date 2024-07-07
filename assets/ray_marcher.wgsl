@@ -6,6 +6,7 @@ struct RayMarcherSettings {
     perspective_factor: f32,
     near: f32,
     far: f32,
+    light_dir: vec3<f32>,
 }
 @group(0) @binding(0) var<uniform> settings: RayMarcherSettings;
 
@@ -86,11 +87,13 @@ fn march_ray(march: MarchSettings) -> MarchResult {
 
 fn get_individual_ray(position: vec2<u32>) -> MarchSettings {
     var size = textureDimensions(depth_texture);
+    var cone_size = textureDimensions(cone_texture);
+    let cone_factor = vec2<u32>(ceil(vec2<f32>(size) / vec2<f32>(cone_size)));
     let pixel_factor = 1. / vec2<f32>(size);
 
     let uv = (vec2<f32>(position) + 0.5) * pixel_factor;
 
-    let start = settings.near / textureLoad(cone_texture, position / 8).r;
+    let start = settings.near / textureLoad(cone_texture, position / cone_factor).r;
     return get_initial_settings(uv, start);
 }
 

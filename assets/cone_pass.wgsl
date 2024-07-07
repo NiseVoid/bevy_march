@@ -4,6 +4,7 @@
 
 @group(1) @binding(0) var cone_texture: texture_storage_2d<r32float, write>;
 @group(1) @binding(3) var<storage, read> materials: array<Material>;
+@group(1) @binding(5) var<storage, read> uv_scale: vec2<f32>;
 
 struct Material {
     base_color: vec3<f32>,
@@ -11,21 +12,10 @@ struct Material {
     reflective: f32,
 }
 
-// TODO:
-// struct RayMarcherSettings {
-//     // TODO: Light direction
-//     // TODO: Light color
-//     // TODO: Ambient color
-// }
-// @group(0) @binding(2) var<uniform> pass_settings: MainPassSettings;
-
 @compute @workgroup_size(8, 8, 1)
-fn march(
-    @builtin(global_invocation_id) invocation_id: vec3<u32>,
-    @builtin(num_workgroups) num_workgroups: vec3<u32>,
-) {
+fn march(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
     var size = textureDimensions(cone_texture);
-    let pixel_factor = 1. / vec2<f32>(size);
+    let pixel_factor = uv_scale / vec2<f32>(size);
     let position = invocation_id.xy;
 
     let cluster_start = vec2<f32>(position);
@@ -34,8 +24,8 @@ fn march(
     var cone_march = get_initial_settings(cluster_center * pixel_factor, 0.);
 
     let tl = get_ray_dir(cluster_start * pixel_factor);
-    let tr = get_ray_dir(vec2<f32>(cluster_start.x, cluster_end.y) * pixel_factor);
-    let bl = get_ray_dir(vec2<f32>(cluster_end.x, cluster_start.y) * pixel_factor);
+    let tr = get_ray_dir(vec2<f32>(cluster_end.x, cluster_start.y) * pixel_factor);
+    let bl = get_ray_dir(vec2<f32>(cluster_start.x, cluster_end.y) * pixel_factor);
     let br = get_ray_dir(cluster_end * pixel_factor);
 
     var res: Sdf;
@@ -58,7 +48,7 @@ fn march(
         cluster_size = sqrt(max_sq);
 
         let epsilon = clamp(traveled * 0.001, 0.001, 0.02);
-        if traveled > cone_march.limit || res.dist < cluster_size {
+        if traveled > cone_march.limit || res.dist < cluster_size + epsilon {
             break;
         }
 

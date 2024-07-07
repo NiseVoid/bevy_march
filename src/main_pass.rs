@@ -1,6 +1,7 @@
 use crate::{
     buffers::{BufferSet, Instance, MaterialSize},
     cone_pass::{MarcherConePass, MarcherConeTexture},
+    settings::MarcherSettings,
     MarcherScale, WORKGROUP_SIZE,
 };
 
@@ -12,9 +13,7 @@ use bevy::{
     prelude::*,
     render::{
         camera::RenderTarget,
-        extract_component::{
-            ComponentUniforms, ExtractComponent, ExtractComponentPlugin, UniformComponentPlugin,
-        },
+        extract_component::{ComponentUniforms, ExtractComponent, ExtractComponentPlugin},
         render_asset::{RenderAssetUsages, RenderAssets},
         render_graph::{
             NodeRunError, RenderGraphApp, RenderGraphContext, RenderLabel, ViewNode, ViewNodeRunner,
@@ -26,8 +25,8 @@ use bevy::{
             },
             BindGroup, BindGroupEntries, BindGroupLayout, BindGroupLayoutEntries,
             CachedComputePipelineId, ComputePassDescriptor, ComputePipelineDescriptor, Extent3d,
-            PipelineCache, ShaderStages, ShaderType, StorageTextureAccess, TextureDimension,
-            TextureFormat, TextureUsages,
+            PipelineCache, ShaderStages, StorageTextureAccess, TextureDimension, TextureFormat,
+            TextureUsages,
         },
         renderer::{RenderContext, RenderDevice},
         texture::GpuImage,
@@ -40,12 +39,8 @@ pub struct MainPassPlugin;
 
 impl Plugin for MainPassPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((
-            ExtractComponentPlugin::<MarcherSettings>::default(),
-            UniformComponentPlugin::<MarcherSettings>::default(),
-            ExtractComponentPlugin::<MarcherMainTextures>::default(),
-        ))
-        .add_systems(Last, resize_textures);
+        app.add_plugins((ExtractComponentPlugin::<MarcherMainTextures>::default(),))
+            .add_systems(Last, resize_textures);
 
         app.sub_app_mut(RenderApp)
             .add_systems(
@@ -63,17 +58,6 @@ impl Plugin for MainPassPlugin {
         app.sub_app_mut(RenderApp)
             .init_resource::<RayMarcherPipeline>();
     }
-}
-
-#[derive(Component, ShaderType, ExtractComponent, Clone, Copy, Default, Debug)]
-pub struct MarcherSettings {
-    pub origin: Vec3,
-    pub rotation: Mat3,
-    pub t: f32,
-    pub aspect_ratio: f32,
-    pub perspective_factor: f32,
-    pub near: f32,
-    pub far: f32,
 }
 
 // TODO: Use gpu textures instead of Image handles?
@@ -221,7 +205,7 @@ fn prepare_bind_group(
         let Some(depth) = gpu_images.get(textures.depth.id()) else {
             continue;
         };
-        let Some(cone) = gpu_images.get(cone_texture.0.id()) else {
+        let Some(cone) = gpu_images.get(cone_texture.texture.id()) else {
             continue;
         };
         let bind_group = render_device.create_bind_group(

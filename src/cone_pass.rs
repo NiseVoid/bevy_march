@@ -1,6 +1,6 @@
 use crate::{
     buffers::{BufferSet, Instance, MaterialSize},
-    main_pass::MarcherSettings,
+    settings::MarcherSettings,
     MarcherScale, CONE_SIZE, WORKGROUP_SIZE,
 };
 
@@ -22,10 +22,10 @@ use bevy::{
                 storage_buffer_read_only, storage_buffer_read_only_sized, texture_storage_2d,
                 uniform_buffer,
             },
-            BindGroup, BindGroupEntries, BindGroupLayout, BindGroupLayoutEntries,
-            CachedComputePipelineId, ComputePassDescriptor, ComputePipelineDescriptor, Extent3d,
-            PipelineCache, ShaderStages, StorageTextureAccess, TextureDimension, TextureFormat,
-            TextureUsages,
+            BindGroup, BindGroupEntries, BindGroupLayout, BindGroupLayoutEntries, Buffer,
+            BufferInitDescriptor, BufferUsages, CachedComputePipelineId, ComputePassDescriptor,
+            ComputePipelineDescriptor, Extent3d, PipelineCache, ShaderStages, StorageTextureAccess,
+            TextureDimension, TextureFormat, TextureUsages,
         },
         renderer::{RenderContext, RenderDevice},
         texture::GpuImage,
@@ -58,14 +58,21 @@ impl Plugin for ConePassPlugin {
 
 // TODO: Use gpu textures instead of Image handles?
 #[derive(Component, ExtractComponent, Clone)]
-pub struct MarcherConeTexture(pub Handle<Image>);
+pub struct MarcherConeTexture {
+    pub texture: Handle<Image>,
+    pub uv_scale: Buffer,
+    old_buffer: Option<Buffer>,
+}
 
 impl MarcherConeTexture {
-    pub fn new(images: &mut Assets<Image>, size: (u32, u32)) -> Self {
-        let mut depth = Image::new_fill(
+    pub fn new(images: &mut Assets<Image>, device: &RenderDevice, size: (u32, u32)) -> Self {
+        let width = size.0.div_ceil(CONE_SIZE);
+        let height = size.1.div_ceil(CONE_SIZE);
+
+        let mut texture = Image::new_fill(
             Extent3d {
-                width: size.0.div_ceil(CONE_SIZE),
-                height: size.1.div_ceil(CONE_SIZE),
+                width,
+                height,
                 depth_or_array_layers: 1,
             },
             TextureDimension::D2,
@@ -73,12 +80,34 @@ impl MarcherConeTexture {
             TextureFormat::R32Float,
             RenderAssetUsages::RENDER_WORLD,
         );
-        depth.texture_descriptor.usage = TextureUsages::COPY_DST
+        texture.texture_descriptor.usage = TextureUsages::COPY_DST
             | TextureUsages::STORAGE_BINDING
             | TextureUsages::TEXTURE_BINDING;
-        let depth = images.add(depth);
+        let texture = images.add(texture);
 
-        Self(depth)
+        let repr_width = width * CONE_SIZE;
+        let repr_height = height * CONE_SIZE;
+        let uv_scale = Vec2::new(
+            repr_width as f32 / size.0 as f32,
+            repr_height as f32 / size.1 as f32,
+        );
+        let mut scale_iter = uv_scale
+            .to_array()
+            .into_iter()
+            .map(|f| f.to_le_bytes())
+            .flatten();
+        let scale_bytes = [0u8; 8].map(|_| scale_iter.next().unwrap());
+        let uv_scale = device.create_buffer_with_data(&BufferInitDescriptor {
+            label: Some("uv scale buffer"),
+            contents: &scale_bytes,
+            usage: BufferUsages::STORAGE,
+        });
+
+        Self {
+            texture,
+            uv_scale,
+            old_buffer: None,
+        }
     }
 }
 
@@ -88,12 +117,16 @@ fn resize_texture(
     windows: Query<&Window>,
     primary_window: Query<&Window, With<PrimaryWindow>>,
     mut images: ResMut<Assets<Image>>,
+    render_device: Res<RenderDevice>,
 ) {
     if resized.read().last().is_none() {
         return;
     }
 
-    for (camera, mut textures, scale) in textures.iter_mut() {
+    for (camera, mut texture, scale) in textures.iter_mut() {
+        if let Some(old) = texture.old_buffer.take() {
+            old.destroy();
+        };
         let RenderTarget::Window(window) = camera.target else {
             continue;
         };
@@ -108,7 +141,9 @@ fn resize_texture(
         let new_width = window.physical_width() / scale;
         let new_height = window.physical_height() / scale;
 
-        *textures = MarcherConeTexture::new(&mut images, (new_width, new_height));
+        let old_buffer = Some(texture.uv_scale.clone());
+        *texture = MarcherConeTexture::new(&mut images, &render_device, (new_width, new_height));
+        texture.old_buffer = old_buffer;
     }
 }
 
@@ -175,8 +210,8 @@ fn prepare_bind_group(
     buffer_set: Res<BufferSet>,
     render_device: Res<RenderDevice>,
 ) {
-    for (entity, textures) in textures.iter() {
-        let Some(depth) = gpu_images.get(textures.0.id()) else {
+    for (entity, texture) in textures.iter() {
+        let Some(depth) = gpu_images.get(texture.texture.id()) else {
             continue;
         };
         let bind_group = render_device.create_bind_group(
@@ -188,6 +223,7 @@ fn prepare_bind_group(
                 buffer_set.sdfs.as_entire_binding(),
                 buffer_set.materials.as_entire_binding(),
                 buffer_set.instances.as_entire_binding(),
+                texture.uv_scale.as_entire_binding(),
             )),
         );
         commands.entity(entity).insert(MarcherStorageBindGroup {
@@ -231,6 +267,8 @@ impl FromWorld for RayMarcherPipeline {
                     storage_buffer_read_only_sized(false, Some(mat_size)),
                     // Instances
                     storage_buffer_read_only::<Instance>(false),
+                    // UV scale
+                    storage_buffer_read_only::<Vec2>(false),
                 ),
             ),
         );

@@ -1,23 +1,41 @@
-use crate::{
-    main_pass::MarcherSettings,
-    shadow_pass::{MarcherShadowArea, MarcherShadowSettings},
-};
+use crate::shadow_pass::{MarcherShadowArea, MarcherShadowSettings};
 
 use bevy::{
     math::{bounding::Aabb3d, vec3a},
     prelude::*,
-    render::view::RenderLayers,
+    render::{
+        extract_component::{ExtractComponent, ExtractComponentPlugin, UniformComponentPlugin},
+        render_resource::ShaderType,
+        view::RenderLayers,
+    },
 };
 
 pub struct SettingsPlugin;
 
 impl Plugin for SettingsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
+        app.add_plugins((
+            ExtractComponentPlugin::<MarcherSettings>::default(),
+            UniformComponentPlugin::<MarcherSettings>::default(),
+        ))
+        .add_systems(
             PostUpdate,
             update_settings.after(TransformSystem::TransformPropagate),
         );
     }
+}
+
+// TODO: Split settings between ones relevant for the main pass and all other passes
+#[derive(Component, ShaderType, ExtractComponent, Clone, Copy, Default, Debug)]
+pub struct MarcherSettings {
+    pub origin: Vec3,
+    pub rotation: Mat3,
+    pub t: f32,
+    pub aspect_ratio: f32,
+    pub perspective_factor: f32,
+    pub near: f32,
+    pub far: f32,
+    pub light_dir: Vec3,
 }
 
 fn update_settings(
@@ -29,8 +47,8 @@ fn update_settings(
     )>,
     mut lights: Query<
         (
-            &mut MarcherShadowSettings,
-            &mut MarcherShadowArea,
+            Option<&mut MarcherShadowSettings>,
+            Option<&mut MarcherShadowArea>,
             &GlobalTransform,
             Option<&RenderLayers>,
         ),
@@ -79,6 +97,7 @@ fn update_settings(
             {
                 continue;
             }
+            settings.light_dir = transform.forward().into();
             _ = (&mut area, transform);
             // TODO
         }
