@@ -1,12 +1,7 @@
-#import "ray_marcher.wgsl"::{march_ray, MarchSettings, get_initial_settings, settings, calc_normal, get_occlusion, Sdf, get_scene_dist, get_ray_dir};
-#import "ray_marcher.wgsl"::{shape_data, instance_data};
-#import bevy_pbr::view_transformations::view_z_to_depth_ndc;
+#import "ray_marcher.wgsl"::{get_individual_ray, march_ray, settings, calc_normal, get_occlusion, MarchSettings, MarchResult, depth_texture};
 
-@group(1) @binding(0) var depth_texture: texture_storage_2d<r32float, write>;
 @group(1) @binding(1) var color_texture: texture_storage_2d<rgba16float, write>;
 @group(1) @binding(3) var<storage, read> materials: array<Material>;
-
-@group(1) @binding(5) var cone_texture: texture_storage_2d<r32float, read>;
 
 struct Material {
     base_color: vec3<f32>,
@@ -14,98 +9,66 @@ struct Material {
     reflective: f32,
 }
 
-// TODO:
-// struct RayMarcherSettings {
-//     // TODO: Light direction
-//     // TODO: Light color
-//     // TODO: Ambient color
-// }
-// @group(0) @binding(2) var<uniform> pass_settings: MainPassSettings;
-
 @compute @workgroup_size(8, 8, 1)
-fn march(
-    @builtin(global_invocation_id) invocation_id: vec3<u32>,
-    @builtin(num_workgroups) num_workgroups: vec3<u32>,
-) {
-    var size = textureDimensions(color_texture);
-    let pixel_factor = 1. / vec2<f32>(size);
-    let position = invocation_id.xy;
+fn march(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
+    let march = get_individual_ray(invocation_id.xy);
+    let res = march_ray(march);
+    let color = get_color(march, res);
 
-    let uv = (vec2<f32>(position) + 0.5) * pixel_factor;
-    let sampled = textureLoad(cone_texture, position / 8).r;
-    let start = settings.near / sampled;
-    if start >= settings.far {
-        textureStore(depth_texture, position, vec4<f32>(sampled, 0., 0., 0.));
-        let dir = get_ray_dir(uv);
-        textureStore(color_texture, position, vec4<f32>(skybox(dir), 1.));
-        return;
-    }
-
-    let out = march_single(uv, start);
-    textureStore(depth_texture, position, vec4<f32>(settings.near / out.w, 0., 0., 0.));
-    textureStore(color_texture, position, vec4<f32>(out.rgb, 1.));
+    textureStore(depth_texture, invocation_id.xy, vec4<f32>(settings.near / res.traveled, 0., 0., 0.));
+    textureStore(color_texture, invocation_id.xy, vec4<f32>(color, 1.));
 }
 
-fn march_single(uv: vec2<f32>, cone_travel: f32) -> vec4<f32> {
-    var march = get_initial_settings(uv);
-    march.start = cone_travel;
-    let res = march_ray(march);
-
+fn get_color(march: MarchSettings, res: MarchResult) -> vec3<f32> {
     let c = cos(settings.t / 2. % 6.35);
     let s = sin(settings.t / 2. % 6.35);
     let light_dir = normalize(vec3<f32>(s, 0.7, c));
 
-    if res.traveled > 80. {
-        return vec4<f32>(skybox(march.direction), settings.far);
-    }
-    if res.distance < 0.05 {
-        let hit = march.origin + march.direction * (res.traveled - 0.01);
-        let normal = calc_normal(hit);
-        var diffuse = max(dot(normal, light_dir), 0.);
-
-        var material = materials[res.material];
-        if res.material == 50000 {
-            material.reflective = 0.97;
-            material.base_color = vec3<f32>(0.5, 1., 0.5);
-        }
-        var albedo = material.base_color;
-        var emission = material.emissive;
-        if material.reflective > 0.01 {
-            let base_strength = (1. - material.reflective);
-            let base_color = base_strength * material.base_color;
-
-            var reflected: MarchSettings;
-            reflected.origin = march.origin + march.direction * res.traveled;
-            reflected.direction = reflect(march.direction, normal);
-            reflected.limit = settings.far - res.traveled;
-            reflected.ignored = 50000u;
-            let res = march_ray(reflected);
-            let refl_mat = materials[res.material];
-            if res.distance < 0.1 {
-                emission += refl_mat.emissive * material.reflective;
-                albedo = base_color + refl_mat.base_color * material.reflective;
-
-                let reflected_hit = hit + reflected.direction * (res.traveled - 0.01);
-                let reflected_normal = calc_normal(reflected_hit);
-                diffuse = max(dot(reflected_normal, light_dir), 0.);
-            } else {
-                albedo = base_color + skybox(reflected.direction) * material.reflective;
-            }
-        }
-        let ao = get_occlusion(march.origin + march.direction * res.traveled, normal);
-        let light = max(diffuse, ao * 0.4);
-        let color = max(emission, vec3<f32>(albedo * light));
-        if res.traveled > 50. {
-            let factor = min((res.traveled - 50.) / 30., 1.);
-            return vec4<f32>(
-                (1. - factor) * color,
-                res.traveled + res.distance
-            );
-        }
-        return vec4<f32>(color, res.traveled + res.distance);
+    if res.traveled >= 100. {
+        return skybox(march.direction);
     }
 
-    return vec4<f32>(skybox(march.direction), settings.far);
+    let hit = march.origin + march.direction * (res.traveled - 0.01);
+    let normal = calc_normal(hit);
+    var diffuse = max(dot(normal, light_dir), 0.);
+
+    var material = materials[res.material];
+    if res.material == 50000 {
+        material.reflective = 0.97;
+        material.base_color = vec3<f32>(0.5, 1., 0.5);
+    }
+    var albedo = material.base_color;
+    var emission = material.emissive;
+    if material.reflective > 0.01 {
+        let base_strength = (1. - material.reflective);
+        let base_color = base_strength * material.base_color;
+
+        var reflected: MarchSettings;
+        reflected.origin = march.origin + march.direction * res.traveled;
+        reflected.direction = reflect(march.direction, normal);
+        reflected.limit = settings.far - res.traveled;
+        reflected.ignored = 50000u;
+        let res = march_ray(reflected);
+        let refl_mat = materials[res.material];
+        if res.distance < 0.1 {
+            emission += refl_mat.emissive * material.reflective;
+            albedo = base_color + refl_mat.base_color * material.reflective;
+
+            let reflected_hit = hit + reflected.direction * (res.traveled - 0.01);
+            let reflected_normal = calc_normal(reflected_hit);
+            diffuse = max(dot(reflected_normal, light_dir), 0.);
+        } else {
+            albedo = base_color + skybox(reflected.direction) * material.reflective;
+        }
+    }
+    let ao = get_occlusion(march.origin + march.direction * res.traveled, normal);
+    let light = max(diffuse, ao * 0.4);
+    let color = max(emission, vec3<f32>(albedo * light));
+    if res.traveled > 50. {
+        let factor = min((res.traveled - 50.) / 50., 1.);
+        return (1. - factor) * color;
+    }
+    return color;
 }
 
 fn skybox(direction: vec3<f32>) -> vec3<f32> {

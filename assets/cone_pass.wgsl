@@ -31,7 +31,7 @@ fn march(
     let cluster_start = vec2<f32>(position);
     let cluster_end = vec2<f32>(position + 1);
     let cluster_center = (cluster_start + cluster_end) * 0.5;
-    var cone_march = get_initial_settings(cluster_center * pixel_factor);
+    var cone_march = get_initial_settings(cluster_center * pixel_factor, 0.);
 
     let tl = get_ray_dir(cluster_start * pixel_factor);
     let tr = get_ray_dir(vec2<f32>(cluster_start.x, cluster_end.y) * pixel_factor);

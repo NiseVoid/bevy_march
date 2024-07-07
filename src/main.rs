@@ -208,7 +208,7 @@ fn setup(
                 ..default()
             },
             projection: Projection::Perspective(PerspectiveProjection {
-                far: 200.,
+                far: 100.,
                 ..default()
             }),
             ..default()
