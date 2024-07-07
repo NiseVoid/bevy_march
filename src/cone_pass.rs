@@ -1,7 +1,7 @@
 use crate::{
     buffers::{BufferSet, Instance, MaterialSize},
-    cone_pass::{MarcherConePass, MarcherConeTexture},
-    MarcherScale, WORKGROUP_SIZE,
+    main_pass::MarcherSettings,
+    MarcherScale, CONE_SIZE, WORKGROUP_SIZE,
 };
 
 use std::borrow::Cow;
@@ -12,9 +12,7 @@ use bevy::{
     prelude::*,
     render::{
         camera::RenderTarget,
-        extract_component::{
-            ComponentUniforms, ExtractComponent, ExtractComponentPlugin, UniformComponentPlugin,
-        },
+        extract_component::{ComponentUniforms, ExtractComponent, ExtractComponentPlugin},
         render_asset::{RenderAssetUsages, RenderAssets},
         render_graph::{
             NodeRunError, RenderGraphApp, RenderGraphContext, RenderLabel, ViewNode, ViewNodeRunner,
@@ -26,8 +24,8 @@ use bevy::{
             },
             BindGroup, BindGroupEntries, BindGroupLayout, BindGroupLayoutEntries,
             CachedComputePipelineId, ComputePassDescriptor, ComputePipelineDescriptor, Extent3d,
-            PipelineCache, ShaderStages, ShaderType, StorageTextureAccess, TextureDimension,
-            TextureFormat, TextureUsages,
+            PipelineCache, ShaderStages, StorageTextureAccess, TextureDimension, TextureFormat,
+            TextureUsages,
         },
         renderer::{RenderContext, RenderDevice},
         texture::GpuImage,
@@ -36,27 +34,20 @@ use bevy::{
     window::{PrimaryWindow, WindowRef, WindowResized},
 };
 
-pub struct MainPassPlugin;
+pub struct ConePassPlugin;
 
-impl Plugin for MainPassPlugin {
+impl Plugin for ConePassPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((
-            ExtractComponentPlugin::<MarcherSettings>::default(),
-            UniformComponentPlugin::<MarcherSettings>::default(),
-            ExtractComponentPlugin::<MarcherMainTextures>::default(),
-        ))
-        .add_systems(Last, resize_textures);
+        app.add_plugins((ExtractComponentPlugin::<MarcherConeTexture>::default(),))
+            .add_systems(Last, resize_texture);
 
         app.sub_app_mut(RenderApp)
             .add_systems(
                 Render,
                 prepare_bind_group.in_set(RenderSet::PrepareBindGroups),
             )
-            .add_render_graph_node::<ViewNodeRunner<MarcherMainPass>>(Core3d, MarcherMainPass)
-            .add_render_graph_edges(
-                Core3d,
-                (MarcherConePass, MarcherMainPass, Node3d::StartMainPass),
-            );
+            .add_render_graph_node::<ViewNodeRunner<MarcherConePass>>(Core3d, MarcherConePass)
+            .add_render_graph_edges(Core3d, (MarcherConePass, Node3d::StartMainPass));
     }
 
     fn finish(&self, app: &mut App) {
@@ -65,30 +56,16 @@ impl Plugin for MainPassPlugin {
     }
 }
 
-#[derive(Component, ShaderType, ExtractComponent, Clone, Copy, Default, Debug)]
-pub struct MarcherSettings {
-    pub origin: Vec3,
-    pub rotation: Mat3,
-    pub t: f32,
-    pub aspect_ratio: f32,
-    pub perspective_factor: f32,
-    pub near: f32,
-    pub far: f32,
-}
-
 // TODO: Use gpu textures instead of Image handles?
 #[derive(Component, ExtractComponent, Clone)]
-pub struct MarcherMainTextures {
-    pub depth: Handle<Image>,
-    pub color: Handle<Image>,
-}
+pub struct MarcherConeTexture(pub Handle<Image>);
 
-impl MarcherMainTextures {
+impl MarcherConeTexture {
     pub fn new(images: &mut Assets<Image>, size: (u32, u32)) -> Self {
         let mut depth = Image::new_fill(
             Extent3d {
-                width: size.0,
-                height: size.1,
+                width: size.0.div_ceil(CONE_SIZE),
+                height: size.1.div_ceil(CONE_SIZE),
                 depth_or_array_layers: 1,
             },
             TextureDimension::D2,
@@ -101,29 +78,13 @@ impl MarcherMainTextures {
             | TextureUsages::TEXTURE_BINDING;
         let depth = images.add(depth);
 
-        let mut color = Image::new_fill(
-            Extent3d {
-                width: size.0,
-                height: size.1,
-                depth_or_array_layers: 1,
-            },
-            TextureDimension::D2,
-            &[0; 8],
-            TextureFormat::Rgba16Float,
-            RenderAssetUsages::RENDER_WORLD,
-        );
-        color.texture_descriptor.usage = TextureUsages::COPY_DST
-            | TextureUsages::STORAGE_BINDING
-            | TextureUsages::TEXTURE_BINDING;
-        let color = images.add(color);
-
-        Self { color, depth }
+        Self(depth)
     }
 }
 
-fn resize_textures(
+fn resize_texture(
     mut resized: EventReader<WindowResized>,
-    mut textures: Query<(&Camera, &mut MarcherMainTextures, Option<&MarcherScale>)>,
+    mut textures: Query<(&Camera, &mut MarcherConeTexture, Option<&MarcherScale>)>,
     windows: Query<&Window>,
     primary_window: Query<&Window, With<PrimaryWindow>>,
     mut images: ResMut<Assets<Image>>,
@@ -147,14 +108,14 @@ fn resize_textures(
         let new_width = window.physical_width() / scale;
         let new_height = window.physical_height() / scale;
 
-        *textures = MarcherMainTextures::new(&mut images, (new_width, new_height));
+        *textures = MarcherConeTexture::new(&mut images, (new_width, new_height));
     }
 }
 
 #[derive(RenderLabel, Clone, PartialEq, Eq, Hash, Default, Debug)]
-pub struct MarcherMainPass;
+pub struct MarcherConePass;
 
-impl ViewNode for MarcherMainPass {
+impl ViewNode for MarcherConePass {
     type ViewQuery = (&'static MarcherSettings, &'static MarcherStorageBindGroup);
 
     fn run(
@@ -210,18 +171,12 @@ fn prepare_bind_group(
     mut commands: Commands,
     pipeline: Res<RayMarcherPipeline>,
     gpu_images: Res<RenderAssets<GpuImage>>,
-    textures: Query<(Entity, &MarcherMainTextures, &MarcherConeTexture)>,
+    textures: Query<(Entity, &MarcherConeTexture)>,
     buffer_set: Res<BufferSet>,
     render_device: Res<RenderDevice>,
 ) {
-    for (entity, textures, cone_texture) in textures.iter() {
-        let Some(color) = gpu_images.get(textures.color.id()) else {
-            continue;
-        };
-        let Some(depth) = gpu_images.get(textures.depth.id()) else {
-            continue;
-        };
-        let Some(cone) = gpu_images.get(cone_texture.0.id()) else {
+    for (entity, textures) in textures.iter() {
+        let Some(depth) = gpu_images.get(textures.0.id()) else {
             continue;
         };
         let bind_group = render_device.create_bind_group(
@@ -229,16 +184,15 @@ fn prepare_bind_group(
             &pipeline.storage_layout,
             &BindGroupEntries::sequential((
                 &depth.texture_view,
-                &color.texture_view,
+                &depth.texture_view,
                 buffer_set.sdfs.as_entire_binding(),
                 buffer_set.materials.as_entire_binding(),
                 buffer_set.instances.as_entire_binding(),
-                &cone.texture_view,
             )),
         );
         commands.entity(entity).insert(MarcherStorageBindGroup {
             bind_group,
-            size: color.size,
+            size: depth.size,
         });
     }
 }
@@ -269,25 +223,24 @@ impl FromWorld for RayMarcherPipeline {
                 (
                     // Depth texture
                     texture_storage_2d(TextureFormat::R32Float, StorageTextureAccess::WriteOnly),
-                    // Color texture
-                    texture_storage_2d(TextureFormat::Rgba16Float, StorageTextureAccess::WriteOnly),
+                    // TODO: Make bind groups reusable so we don't need this as padding
+                    texture_storage_2d(TextureFormat::R32Float, StorageTextureAccess::WriteOnly),
                     // SDFs
                     storage_buffer_read_only::<u32>(false),
                     // Materials
                     storage_buffer_read_only_sized(false, Some(mat_size)),
                     // Instances
                     storage_buffer_read_only::<Instance>(false),
-                    texture_storage_2d(TextureFormat::R32Float, StorageTextureAccess::ReadOnly),
                 ),
             ),
         );
 
-        let shader = world.resource::<AssetServer>().load("main_pass.wgsl");
+        let shader = world.resource::<AssetServer>().load("cone_pass.wgsl");
 
         let pipeline_id = world
             .resource_mut::<PipelineCache>()
             .queue_compute_pipeline(ComputePipelineDescriptor {
-                label: Some("ray_marcher_pipeline".into()),
+                label: Some("cone_marcher_pipeline".into()),
                 layout: vec![settings_layout.clone(), storage_layout.clone()],
                 push_constant_ranges: Vec::new(),
                 shader: shader.clone(),

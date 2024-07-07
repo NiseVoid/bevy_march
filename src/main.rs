@@ -17,6 +17,9 @@ use bevy_prototype_sdf::Sdf3d;
 mod buffers;
 use buffers::BufferPlugin;
 
+mod cone_pass;
+use cone_pass::{ConePassPlugin, MarcherConeTexture};
+
 mod main_pass;
 use main_pass::{MainPassPlugin, MarcherMainTextures, MarcherSettings};
 
@@ -53,6 +56,7 @@ impl<Material: MarcherMaterial> Plugin for RayMarcherPlugin<Material> {
             .init_asset::<Material>()
             .add_plugins((
                 BufferPlugin::<Material>::default(),
+                ConePassPlugin,
                 MainPassPlugin,
                 SettingsPlugin,
                 WritebackPlugin,
@@ -62,7 +66,6 @@ impl<Material: MarcherMaterial> Plugin for RayMarcherPlugin<Material> {
 
 const WORKGROUP_SIZE: u32 = 8;
 const CONE_SIZE: u32 = 8;
-const BLOCK_SIZE: u32 = WORKGROUP_SIZE * CONE_SIZE;
 
 // TODO: Turn the main code below into an example
 
@@ -212,6 +215,7 @@ fn setup(
         },
         MarcherSettings::default(),
         MarcherMainTextures::new(&mut images, (8, 8)),
+        MarcherConeTexture::new(&mut images, (8, 8)),
         MarcherScale(1),
         BloomSettings {
             intensity: 0.5,
