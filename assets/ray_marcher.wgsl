@@ -114,13 +114,13 @@ fn get_occlusion(point: vec3<f32>, normal: vec3<f32>) -> f32 {
     return saturate(occlusion);
 }
 
-fn calc_normal(p: vec3<f32>) -> vec3<f32> {
+fn calc_normal(p: vec3<f32>, ignore: u32) -> vec3<f32> {
     let eps = 0.0001;
     let h = vec2<f32>(eps, 0.);
     return normalize(vec3<f32>(
-        get_scene_dist(p+h.xyy, 999999999u).dist - get_scene_dist(p - h.xyy, 999999999u).dist,
-        get_scene_dist(p+h.yxy, 999999999u).dist - get_scene_dist(p - h.yxy, 999999999u).dist,
-        get_scene_dist(p+h.yyx, 999999999u).dist - get_scene_dist(p - h.yyx, 999999999u).dist,
+        get_scene_dist(p+h.xyy, ignore).dist - get_scene_dist(p - h.xyy, ignore).dist,
+        get_scene_dist(p+h.yxy, ignore).dist - get_scene_dist(p - h.yxy, ignore).dist,
+        get_scene_dist(p+h.yyx, ignore).dist - get_scene_dist(p - h.yyx, ignore).dist,
     ));
 }
 

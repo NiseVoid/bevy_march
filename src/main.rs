@@ -88,7 +88,15 @@ fn main() {
         ))
         .init_resource::<CursorState>()
         .add_systems(Startup, setup)
-        .add_systems(Update, ((grab_cursor, rotate_and_move).chain(), update_fps))
+        .add_systems(
+            Update,
+            (
+                (grab_cursor, rotate_and_move).chain(),
+                update_offsets,
+                rotate_light,
+                update_fps,
+            ),
+        )
         .run();
 }
 
@@ -163,14 +171,14 @@ fn setup(
     });
 
     // Spawn some meshes to test interaction with raymarcher
-    let mesh = meshes.add(Plane3d::new(Vec3::Z, Vec2::ONE));
+    let mesh = meshes.add(Cuboid::new(2., 2., 0.01));
     let mat = std_mats.add(StandardMaterial::from(Color::srgb(1., 0.5, 0.5)));
 
     // Plane 1
     commands.spawn(PbrBundle {
         mesh: mesh.clone(),
         material: mat.clone(),
-        transform: Transform::from_xyz(0.5, 0., -5.).with_scale(Vec3::splat(2.2)),
+        transform: Transform::from_xyz(0.5, 0., -5.).with_scale(Vec3::splat(2.)),
         ..default()
     });
 
@@ -182,15 +190,30 @@ fn setup(
         ..default()
     });
 
+    // Plane 3
+    commands.spawn(PbrBundle {
+        mesh: mesh.clone(),
+        material: mat.clone(),
+        transform: Transform::from_xyz(1.5, 1., -20.).with_scale(Vec3::splat(1.5)),
+        ..default()
+    });
+
     let mesh = meshes.add(Sphere::default().mesh().ico(3).unwrap());
 
     // Sphere
-    commands.spawn(PbrBundle {
-        mesh,
-        material: mat.clone(),
-        transform: Transform::from_xyz(1.5, -1., 0.),
-        ..default()
-    });
+    commands.spawn((
+        PbrBundle {
+            mesh,
+            material: mat.clone(),
+            transform: Transform::from_xyz(1.5, -1., 0.),
+            ..default()
+        },
+        Offset {
+            t: 0.,
+            scale: 0.5,
+            speed: 1.,
+        },
+    ));
 
     let mesh = meshes.add(Cuboid::default());
 
@@ -284,11 +307,11 @@ fn setup(
         reflective: 0.,
     });
 
-    for pos in [
-        vec3(3., -1.6, -15.),
-        vec3(-5., -1.3, -12.),
-        vec3(6., -1.4, -9.),
-        vec3(-5., -1.5, -7.),
+    for (pos, scale, speed) in [
+        (vec3(3., -1.6, -15.), 0.44, 0.8),
+        (vec3(-5., -1.3, -12.), 0.35, -1.),
+        (vec3(6., -1.4, -9.), 0.3, -1.2),
+        (vec3(-5., -1.5, -7.), 0.5, 0.4),
     ] {
         commands.spawn((
             TransformBundle::from_transform(
@@ -296,6 +319,11 @@ fn setup(
             ),
             sphere.clone(),
             sphere_material.clone(),
+            Offset {
+                t: 0.,
+                scale,
+                speed,
+            },
         ));
     }
 
@@ -416,5 +444,31 @@ fn rotate_and_move(
             euler.1 += rotation_input.y * 0.003;
             transform.rotation = Quat::from_euler(EulerRot::YXZ, euler.0, euler.1, 0.);
         }
+    }
+}
+
+fn rotate_light(time: Res<Time>, mut lights: Query<&mut Transform, With<DirectionalLight>>) {
+    for mut transform in lights.iter_mut() {
+        let mut euler = transform.rotation.to_euler(EulerRot::YXZ);
+        euler.0 += 0.2 * time.delta_seconds();
+        transform.rotation = Quat::from_euler(EulerRot::YXZ, euler.0, euler.1, euler.2);
+    }
+}
+
+#[derive(Component)]
+struct Offset {
+    t: f32,
+    scale: f32,
+    speed: f32,
+}
+
+fn update_offsets(time: Res<Time>, mut spheres: Query<(&mut Transform, &mut Offset)>) {
+    for (mut transform, mut offset) in spheres.iter_mut() {
+        // Remove old offset
+        transform.translation.y -= offset.t.sin() * offset.speed;
+
+        // Calculate and apply new offset
+        offset.t += offset.scale * time.delta_seconds();
+        transform.translation.y += offset.t.sin() * offset.speed;
     }
 }

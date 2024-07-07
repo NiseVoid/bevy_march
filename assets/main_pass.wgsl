@@ -25,7 +25,7 @@ fn get_color(march: MarchSettings, res: MarchResult) -> vec3<f32> {
     }
 
     let hit = march.origin + march.direction * (res.traveled - 0.01);
-    let normal = calc_normal(hit);
+    let normal = calc_normal(hit, march.ignored);
     var diffuse = dot(normal, -settings.light_dir);
 
     var material = materials[res.material];
@@ -52,16 +52,16 @@ fn get_color(march: MarchSettings, res: MarchResult) -> vec3<f32> {
             albedo = base_color + refl_mat.base_color * material.reflective;
 
             let reflected_hit = hit + reflected.direction * (res.traveled - 0.01);
-            let reflected_normal = calc_normal(reflected_hit);
+            let reflected_normal = calc_normal(reflected_hit, reflected.ignored);
             diffuse = max(dot(reflected_normal, -settings.light_dir), 0.);
         } else {
             albedo = base_color + skybox(reflected.direction) * material.reflective;
         }
     }
     var ambient = 1.;
-    if diffuse <= 0. {
+    if diffuse <= 0.15 {
         // TODO: When reflected, use final hit and normal for AO
-        let ambient = 1. - get_occlusion(march.origin + march.direction * res.traveled, normal);
+        ambient = get_occlusion(march.origin + march.direction * res.traveled, normal);
     }
     let light = max(diffuse, ambient * 0.15);
     let color = max(emission, vec3<f32>(albedo * light));
