@@ -1,6 +1,4 @@
-#import "ray_marcher.wgsl"::{march_ray, MarchSettings, get_initial_settings, settings, calc_normal, get_occlusion, Sdf, get_scene_dist, get_ray_dir};
-#import "ray_marcher.wgsl"::{shape_data, instance_data};
-#import bevy_pbr::view_transformations::view_z_to_depth_ndc;
+#import sdf_marcher::{get_initial_settings, settings, Sdf, get_scene_dist, get_ray_dir};
 
 @group(1) @binding(0) var cone_texture: texture_storage_2d<r32float, write>;
 @group(1) @binding(3) var<storage, read> materials: array<Material>;

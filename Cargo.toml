@@ -19,6 +19,14 @@ strip = true
 
 [dependencies]
 bevy = {version = "0.14.0", default-features = false, features = [
+  "bevy_color",
+  "bevy_core_pipeline",
+  "bevy_render",
+]}
+bevy_prototype_sdf = {path = "../bevy_prototype_sdf", default-features=false, features = ["bevy_asset"]}
+
+[dev-dependencies]
+bevy = {version = "0.14.0", default-features = false, features = [
   "multi_threaded",
   "wayland",
   "bevy_color",
@@ -28,12 +36,10 @@ bevy = {version = "0.14.0", default-features = false, features = [
   "bevy_winit",
   "tonemapping_luts",
   "file_watcher",
+  "embedded_watcher",
   "bevy_sprite",
   "bevy_text",
   "default_font",
-
-  # Formats
   "ktx2",
   "zstd",
 ]}
-bevy_prototype_sdf = {path = "../bevy_prototype_sdf", default-features=false, features = ["bevy_asset"]}

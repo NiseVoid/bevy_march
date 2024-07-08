@@ -7,6 +7,7 @@ use crate::{
 use std::borrow::Cow;
 
 use bevy::{
+    asset::embedded_asset,
     core_pipeline::core_3d::graph::{Core3d, Node3d},
     ecs::query::QueryItem,
     prelude::*,
@@ -38,6 +39,7 @@ pub struct ConePassPlugin;
 
 impl Plugin for ConePassPlugin {
     fn build(&self, app: &mut App) {
+        embedded_asset!(app, "cone_pass.wgsl");
         app.add_plugins((ExtractComponentPlugin::<MarcherConeTexture>::default(),))
             .add_systems(Last, resize_texture);
 
@@ -273,7 +275,9 @@ impl FromWorld for RayMarcherPipeline {
             ),
         );
 
-        let shader = world.resource::<AssetServer>().load("cone_pass.wgsl");
+        let shader = world
+            .resource::<AssetServer>()
+            .load("embedded://sdf_marcher/cone_pass.wgsl");
 
         let pipeline_id = world
             .resource_mut::<PipelineCache>()

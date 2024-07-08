@@ -60,6 +60,9 @@ impl Plugin for MainPassPlugin {
     }
 }
 
+#[derive(Resource, Deref)]
+pub struct MainPassShader(pub Handle<Shader>);
+
 // TODO: Use gpu textures instead of Image handles?
 #[derive(Component, ExtractComponent, Clone)]
 pub struct MarcherMainTextures {
@@ -266,7 +269,7 @@ impl FromWorld for RayMarcherPipeline {
             ),
         );
 
-        let shader = world.resource::<AssetServer>().load("main_pass.wgsl");
+        let shader = (*world.resource::<MainPassShader>()).clone();
 
         let pipeline_id = world
             .resource_mut::<PipelineCache>()

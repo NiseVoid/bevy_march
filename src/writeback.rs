@@ -1,4 +1,5 @@
 use bevy::{
+    asset::embedded_asset,
     core_pipeline::{
         core_3d::graph::{Core3d, Node3d},
         fullscreen_vertex_shader::fullscreen_shader_vertex_state,
@@ -32,6 +33,7 @@ pub struct WritebackPlugin;
 
 impl Plugin for WritebackPlugin {
     fn build(&self, app: &mut App) {
+        embedded_asset!(app, "writeback.wgsl");
         app.sub_app_mut(RenderApp)
             .add_systems(Render, update_pipeline.in_set(RenderSet::PrepareAssets))
             .add_systems(
@@ -54,7 +56,6 @@ impl Plugin for WritebackPlugin {
 #[derive(RenderLabel, Clone, PartialEq, Eq, Hash, Default, Debug)]
 pub struct MarcherWriteback;
 
-// TODO: Make writeback full screen shader, similar to the post processing example
 impl ViewNode for MarcherWriteback {
     type ViewQuery = (
         &'static ViewTarget,
@@ -174,8 +175,7 @@ impl FromWorld for WritebackPipeline {
             ..default()
         });
 
-        // TODO: Use embedded assets so we can use this as a crate
-        let shader = world.load_asset("writeback.wgsl");
+        let shader = world.load_asset("embedded://sdf_marcher/writeback.wgsl");
 
         let pipeline_id =
             world

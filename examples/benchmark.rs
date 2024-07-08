@@ -1,4 +1,5 @@
-use std::marker::PhantomData;
+use bevy_prototype_sdf::Sdf3d;
+use sdf_marcher::*;
 
 use bevy::{
     core_pipeline::bloom::BloomSettings,
@@ -6,86 +7,27 @@ use bevy::{
     input::mouse::MouseMotion,
     math::vec3,
     prelude::*,
-    render::{
-        render_resource::{encase::internal::WriteInto, *},
-        renderer::RenderDevice,
-    },
+    render::{render_resource::ShaderType, renderer::RenderDevice},
     sprite::Anchor,
     window::CursorGrabMode,
 };
-use bevy_prototype_sdf::Sdf3d;
-
-// TODO: We only need to re-render if any of the buffers change, the light changes, or the camera is moved
-
-mod buffers;
-use buffers::BufferPlugin;
-
-mod cone_pass;
-use cone_pass::{ConePassPlugin, MarcherConeTexture};
-
-mod main_pass;
-use main_pass::{MainPassPlugin, MarcherMainTextures};
-
-mod shadow_pass;
-use shadow_pass::{MarcherShadowSettings, MarcherShadowTextures};
-
-mod settings;
-use settings::{MarcherSettings, SettingsPlugin};
-
-mod writeback;
-use writeback::WritebackPlugin;
-
-pub trait MarcherMaterial: Asset + ShaderType + WriteInto + std::fmt::Debug + Clone {}
-
-#[derive(Component, Deref, DerefMut)]
-pub struct MarcherScale(pub u8);
-
-impl Default for MarcherScale {
-    fn default() -> Self {
-        Self(1)
-    }
-}
-
-/// It is generally encouraged to set up post processing effects as a plugin
-#[derive(Default)]
-struct RayMarcherPlugin<Material: MarcherMaterial> {
-    // TODO: Store shader handle for main pass compute shader
-    _phantom: PhantomData<Material>,
-}
-
-impl<Material: MarcherMaterial> Plugin for RayMarcherPlugin<Material> {
-    fn build(&self, app: &mut App) {
-        app.init_asset::<Sdf3d>()
-            .init_asset::<Material>()
-            .add_plugins((
-                BufferPlugin::<Material>::default(),
-                ConePassPlugin,
-                MainPassPlugin,
-                SettingsPlugin,
-                WritebackPlugin,
-            ));
-    }
-}
-
-const WORKGROUP_SIZE: u32 = 8;
-const CONE_SIZE: u32 = 8;
-
-// TODO: Turn the main code below into an example
 
 fn main() {
-    App::new()
-        // TODO: Pass in shader handle for main pass
-        .add_plugins((
-            DefaultPlugins.set::<WindowPlugin>(WindowPlugin {
-                primary_window: Some(Window {
-                    present_mode: bevy::window::PresentMode::AutoNoVsync,
-                    ..default()
-                }),
+    let mut app = App::new();
+    app.add_plugins((
+        DefaultPlugins.set::<WindowPlugin>(WindowPlugin {
+            primary_window: Some(Window {
+                present_mode: bevy::window::PresentMode::AutoNoVsync,
                 ..default()
             }),
-            FrameTimeDiagnosticsPlugin,
-            RayMarcherPlugin::<SdfMaterial>::default(),
-        ))
+            ..default()
+        }),
+        FrameTimeDiagnosticsPlugin,
+    ));
+
+    let main_pass_shader = app.world().resource::<AssetServer>().load("benchmark.wgsl");
+
+    app.add_plugins(RayMarcherPlugin::<SdfMaterial>::new(main_pass_shader))
         .init_resource::<CursorState>()
         .add_systems(Startup, setup)
         .add_systems(

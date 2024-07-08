@@ -1,3 +1,5 @@
+#define_import_path sdf_marcher
+
 struct RayMarcherSettings {
     origin: vec3<f32>,
     rotation: mat3x3<f32>,
@@ -24,7 +26,6 @@ struct Instance {
 }
 
 fn get_ray_dir(screen_uv: vec2<f32>) -> vec3<f32> {
-    // TODO: Start with UVs in the right format instead
     var march_uv = 1. - screen_uv * 2.;
     march_uv.x *= -settings.aspect_ratio;
 
