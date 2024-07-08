@@ -1,4 +1,4 @@
-#import sdf_marcher::{get_initial_settings, settings, Sdf, get_scene_dist, get_ray_dir};
+#import bevy_march::{get_initial_settings, settings, Sdf, get_scene_dist, get_ray_dir};
 
 @group(1) @binding(0) var cone_texture: texture_storage_2d<r32float, write>;
 @group(1) @binding(3) var<storage, read> materials: array<Material>;

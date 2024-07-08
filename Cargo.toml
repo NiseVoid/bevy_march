@@ -1,7 +1,10 @@
 [package]
-name = "sdf_marcher"
+name = "bevy_march"
 version = "0.1.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "SDF ray marching for bevy"
+keywords = ["bevy", "gamedev", "graphics"]
 
 [profile.dev]
 opt-level = 1

@@ -1,5 +1,5 @@
+use bevy_march::*;
 use bevy_prototype_sdf::Sdf3d;
-use sdf_marcher::*;
 
 use bevy::{
     core_pipeline::bloom::BloomSettings,

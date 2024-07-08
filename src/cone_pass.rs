@@ -277,7 +277,7 @@ impl FromWorld for RayMarcherPipeline {
 
         let shader = world
             .resource::<AssetServer>()
-            .load("embedded://sdf_marcher/cone_pass.wgsl");
+            .load("embedded://bevy_march/cone_pass.wgsl");
 
         let pipeline_id = world
             .resource_mut::<PipelineCache>()

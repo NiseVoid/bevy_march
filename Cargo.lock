@@ -591,6 +591,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy_march"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_prototype_sdf",
+]
+
+[[package]]
 name = "bevy_math"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2649,14 +2657,6 @@ dependencies = [
  "memmap2",
  "smithay-client-toolkit",
  "tiny-skia",
-]
-
-[[package]]
-name = "sdf_marcher"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "bevy_prototype_sdf",
 ]
 
 [[package]]

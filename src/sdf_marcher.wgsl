@@ -1,4 +1,4 @@
-#define_import_path sdf_marcher
+#define_import_path bevy_march
 
 struct RayMarcherSettings {
     origin: vec3<f32>,

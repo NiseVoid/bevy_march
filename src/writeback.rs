@@ -175,7 +175,7 @@ impl FromWorld for WritebackPipeline {
             ..default()
         });
 
-        let shader = world.load_asset("embedded://sdf_marcher/writeback.wgsl");
+        let shader = world.load_asset("embedded://bevy_march/writeback.wgsl");
 
         let pipeline_id =
             world

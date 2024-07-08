@@ -65,7 +65,7 @@ impl<Material: MarcherMaterial> Plugin for RayMarcherPlugin<Material> {
         std::mem::forget(
             app.world()
                 .resource::<AssetServer>()
-                .load::<Shader>("embedded://sdf_marcher/sdf_marcher.wgsl"),
+                .load::<Shader>("embedded://bevy_march/sdf_marcher.wgsl"),
         );
 
         app.init_asset::<Sdf3d>()

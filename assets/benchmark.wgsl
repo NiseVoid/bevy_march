@@ -1,4 +1,4 @@
-#import sdf_marcher::{get_individual_ray, march_ray, settings, calc_normal, get_occlusion, MarchSettings, MarchResult, depth_texture};
+#import bevy_march::{get_individual_ray, march_ray, settings, calc_normal, get_occlusion, MarchSettings, MarchResult, depth_texture};
 
 @group(1) @binding(1) var color_texture: texture_storage_2d<rgba16float, write>;
 @group(1) @binding(3) var<storage, read> materials: array<Material>;
