@@ -29,10 +29,6 @@ fn get_color(march: MarchSettings, res: MarchResult) -> vec3<f32> {
     var diffuse = dot(normal, -settings.light_dir);
 
     var material = materials[res.material];
-    if res.material == 50000 {
-        material.reflective = 0.97;
-        material.base_color = vec3<f32>(0.5, 1., 0.5);
-    }
     var albedo = material.base_color;
     var emission = material.emissive;
     if material.reflective > 0.01 {
@@ -44,7 +40,7 @@ fn get_color(march: MarchSettings, res: MarchResult) -> vec3<f32> {
         reflected.origin = march.origin + march.direction * res.traveled;
         reflected.direction = reflect(march.direction, normal);
         reflected.limit = settings.far - res.traveled;
-        reflected.ignored = 50000u;
+        reflected.ignored = res.id;
         let res = march_ray(reflected);
         let refl_mat = materials[res.material];
         if res.distance < 0.1 {

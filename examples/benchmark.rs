@@ -269,19 +269,18 @@ fn setup(
         ));
     }
 
-    // TODO
-    // let water_plane = sdfs.add(Sdf3d::from(InfinitePlane3d::default()));
-    // let water_material = mats.add(SdfMaterial {
-    //     base_color: LinearRgba::rgb(0., 0.3, 1.).to_vec3(),
-    //     emissive: LinearRgba::BLACK.to_vec3(),
-    //     reflective: 0.7,
-    // });
+    let water_plane = sdfs.add(Sdf3d::from(InfinitePlane3d::default()));
+    let water_material = mats.add(SdfMaterial {
+        base_color: LinearRgba::rgb(0.5, 1., 0.5).to_vec3(),
+        emissive: LinearRgba::BLACK.to_vec3(),
+        reflective: 0.97,
+    });
 
-    // commands.spawn((
-    //     TransformBundle::from_transform(Transform::from_xyz(0., -2.25, 0.)),
-    //     water_plane,
-    //     water_material,
-    // ));
+    commands.spawn((
+        TransformBundle::from_transform(Transform::from_xyz(0., -2.25, 0.)),
+        water_plane,
+        water_material,
+    ));
 }
 
 fn update_fps(

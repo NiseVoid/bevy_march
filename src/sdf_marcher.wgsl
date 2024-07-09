@@ -55,6 +55,7 @@ struct MarchResult {
     distance: f32,
     steps: u32,
     material: u32,
+    id: u32,
 }
 
 fn march_ray(march: MarchSettings) -> MarchResult {
@@ -82,6 +83,7 @@ fn march_ray(march: MarchSettings) -> MarchResult {
     }
     result.distance = res.dist;
     result.material = res.mat;
+    result.id = res.id;
 
     return result;
 }
@@ -128,6 +130,7 @@ fn calc_normal(p: vec3<f32>, ignore: u32) -> vec3<f32> {
 struct Sdf {
     dist: f32,
     mat: u32,
+    id: u32,
 }
 
 fn sdf_min(a: Sdf, b: Sdf) -> Sdf {
@@ -139,12 +142,9 @@ fn sdf_min(a: Sdf, b: Sdf) -> Sdf {
 
 fn get_scene_dist(pos: vec3<f32>, ignored: u32) -> Sdf {
     var res: Sdf;
-    if ignored != 50000u {
-        res.dist = dot(pos, vec3<f32>(0., 1., 0.)) + 2.25;
-        res.mat = 50000u;
-    } else {
-        res.dist = 1e9;
-    }
+    res.dist = 1e9;
+    res.id = 999999999u;
+
     let instance_count = arrayLength(&instances);
     if instance_count == 0 {
         return res;
@@ -160,6 +160,7 @@ fn get_scene_dist(pos: vec3<f32>, ignored: u32) -> Sdf {
         var current: Sdf;
         current.dist = sdf(relative_pos / instance.scale, instance.shape_offset) * instance.scale;
         current.mat = instance.material;
+        current.id = i;
 
         res = sdf_min(res, current);
     }
@@ -186,7 +187,12 @@ fn sdf(pos: vec3<f32>, start: u32) -> f32 {
         let y = bitcast<f32>(shape_data[offset + 1]);
         let z = bitcast<f32>(shape_data[offset + 2]);
         return sd_cuboid(pos, vec3<f32>(x, y, z));
-    } else if shape_kind == 4 { // Extruded
+    } else if shape_kind == 4 { // Infinite plane
+        let x = bitcast<f32>(shape_data[offset]);
+        let y = bitcast<f32>(shape_data[offset + 1]);
+        let z = bitcast<f32>(shape_data[offset + 2]);
+        return dot(pos, vec3<f32>(x, y, z));
+    } else if shape_kind == 5 { // Extruded
         let half_height = bitcast<f32>(shape_data[offset]);
         let extruded_kind = shape_data[offset+1];
         return sd_extrude(pos, half_height, extruded_kind, offset+2);
