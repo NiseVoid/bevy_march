@@ -22,7 +22,7 @@ struct Instance {
     material: u32,
     scale: f32,
     translation: vec3<f32>,
-    matrix: mat3x3<f32>,
+    matrix: mat3x3<f32>, // Inverse rotation + inverse scale
 }
 
 fn get_ray_dir(screen_uv: vec2<f32>) -> vec3<f32> {
@@ -155,10 +155,9 @@ fn get_scene_dist(pos: vec3<f32>, ignored: u32) -> Sdf {
             continue;
         }
         let instance = instances[i];
-        // TODO: Encode the `/ instance.scale` in the matrix
         let relative_pos = instance.matrix * (pos - instance.translation);
         var current: Sdf;
-        current.dist = sdf(relative_pos / instance.scale, instance.shape_offset) * instance.scale;
+        current.dist = sdf(relative_pos, instance.shape_offset) * instance.scale;
         current.mat = instance.material;
         current.id = i;
 

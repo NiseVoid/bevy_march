@@ -110,12 +110,13 @@ impl MarcherMainTextures {
 
 fn resize_textures(
     mut resized: EventReader<WindowResized>,
+    added_marcher: Query<(), Added<MarcherSettings>>,
     mut textures: Query<(&Camera, &mut MarcherMainTextures, Option<&MarcherScale>)>,
     windows: Query<&Window>,
     primary_window: Query<&Window, With<PrimaryWindow>>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    if resized.read().last().is_none() {
+    if resized.read().last().is_none() && added_marcher.is_empty() {
         return;
     }
 

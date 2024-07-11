@@ -14,5 +14,8 @@ fn fragment(in: FullscreenVertexOutput) -> FragmentOutput {
     var out: FragmentOutput;
     out.color = textureSample(color_texture, texture_sampler, in.uv);
     out.depth = textureSample(depth_texture, texture_sampler, in.uv).r;
+    if out.color.a == 0. {
+        discard;
+    }
     return out;
 }

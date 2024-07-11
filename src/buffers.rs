@@ -3,6 +3,7 @@ use crate::MarcherMaterial;
 use std::{marker::PhantomData, num::NonZeroU64};
 
 use bevy::{
+    asset::AssetEvents,
     math::vec3,
     prelude::*,
     render::{
@@ -27,7 +28,7 @@ impl<Material: MarcherMaterial> Default for BufferPlugin<Material> {
 
 impl<Material: MarcherMaterial> Plugin for BufferPlugin<Material> {
     fn build(&self, app: &mut App) {
-        app.add_systems(PostUpdate, upload_new_buffers::<Material>)
+        app.add_systems(Last, upload_new_buffers::<Material>.after(AssetEvents))
             .init_resource::<SdfIndices>()
             .init_resource::<MaterialIndices>();
 
@@ -99,8 +100,10 @@ pub struct Instance {
     mat_index: u32,
     scale: f32,
     translation: Vec3,
-    rotation: Mat3,
+    matrix: Mat3,
 }
+
+// TODO: Handle having no SDFs, no materials or no instances
 
 // TODO: We can probably split this up into three systems each with different scheduling constraints
 fn upload_new_buffers<Material: MarcherMaterial>(
@@ -109,7 +112,7 @@ fn upload_new_buffers<Material: MarcherMaterial>(
     sdfs: Res<Assets<Sdf3d>>,
     mut sdf_indices: ResMut<SdfIndices>,
     mut mat_events: EventReader<AssetEvent<Material>>,
-    mats: ResMut<Assets<Material>>,
+    mats: Res<Assets<Material>>,
     mut mat_indices: ResMut<MaterialIndices>,
     render_device: Res<RenderDevice>,
     render_queue: Res<RenderQueue>,
@@ -251,14 +254,14 @@ fn upload_new_buffers<Material: MarcherMaterial>(
         let inv_scale = scale.recip();
 
         let translation = transform.translation();
-        let rotation = matrix * inv_scale;
+        let matrix = matrix_transpose * (inv_scale * inv_scale);
 
         instance_buffer.push(Instance {
             sdf_index,
             mat_index,
             scale,
             translation,
-            rotation: rotation.into(),
+            matrix: matrix.into(),
         });
     }
 
