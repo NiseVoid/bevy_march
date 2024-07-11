@@ -1,5 +1,5 @@
 use crate::{
-    buffers::{BufferSet, Instance, MaterialSize},
+    buffers::{CurrentBufferSet, Instance, MaterialSize},
     cone_pass::{MarcherConePass, MarcherConeTexture},
     settings::MarcherSettings,
     MarcherScale, WORKGROUP_SIZE,
@@ -199,10 +199,13 @@ fn prepare_bind_group(
     pipeline: Res<RayMarcherPipeline>,
     gpu_images: Res<RenderAssets<GpuImage>>,
     textures: Query<(Entity, &MarcherMainTextures, &MarcherConeTexture)>,
-    buffer_set: Res<BufferSet>,
+    buffer_set: Res<CurrentBufferSet>,
     render_device: Res<RenderDevice>,
 ) {
     for (entity, textures, cone_texture) in textures.iter() {
+        let Some(buffer_set) = &**buffer_set else {
+            continue;
+        };
         let Some(color) = gpu_images.get(textures.color.id()) else {
             continue;
         };
@@ -265,6 +268,7 @@ impl FromWorld for RayMarcherPipeline {
                     storage_buffer_read_only_sized(false, Some(mat_size)),
                     // Instances
                     storage_buffer_read_only::<Instance>(false),
+                    // Cone texture
                     texture_storage_2d(TextureFormat::R32Float, StorageTextureAccess::ReadOnly),
                 ),
             ),

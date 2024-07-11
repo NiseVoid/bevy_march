@@ -40,51 +40,28 @@ impl<Material: MarcherMaterial> Plugin for BufferPlugin<Material> {
     fn finish(&self, app: &mut App) {
         app.init_resource::<Buffers>();
 
-        app.sub_app_mut(RenderApp).init_resource::<BufferSet>();
+        app.sub_app_mut(RenderApp)
+            .init_resource::<CurrentBufferSet>();
     }
 }
 
 #[derive(Resource, Deref)]
 pub struct MaterialSize(NonZeroU64);
 
-#[derive(Resource)]
+#[derive(Resource, Default)]
 pub struct Buffers {
-    current: BufferSet,
+    current: Option<BufferSet>,
     new: Option<BufferSet>,
 }
 
-impl FromWorld for Buffers {
-    fn from_world(world: &mut World) -> Self {
-        Self {
-            current: BufferSet::from_world(world),
-            new: None,
-        }
-    }
-}
+#[derive(Resource, Deref, DerefMut, Default, Debug)]
+pub struct CurrentBufferSet(Option<BufferSet>);
 
-#[derive(Resource, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct BufferSet {
     pub sdfs: Buffer,
     pub materials: Buffer,
     pub instances: Buffer,
-}
-
-impl FromWorld for BufferSet {
-    fn from_world(world: &mut World) -> Self {
-        let render_device = world.resource::<RenderDevice>();
-
-        let empty_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor {
-            usage: BufferUsages::STORAGE,
-            label: Some("Empty"),
-            contents: &[0, 0, 0, 0],
-        });
-
-        Self {
-            sdfs: empty_buffer.clone(),
-            materials: empty_buffer.clone(),
-            instances: empty_buffer,
-        }
-    }
 }
 
 #[derive(Resource, Deref, DerefMut, Default)]
@@ -102,8 +79,6 @@ pub struct Instance {
     translation: Vec3,
     matrix: Mat3,
 }
-
-// TODO: Handle having no SDFs, no materials or no instances
 
 // TODO: We can probably split this up into three systems each with different scheduling constraints
 fn upload_new_buffers<Material: MarcherMaterial>(
@@ -126,15 +101,27 @@ fn upload_new_buffers<Material: MarcherMaterial>(
     >,
     instances: Query<(&Handle<Sdf3d>, &Handle<Material>, &GlobalTransform)>,
 ) {
-    if let Some(previous_new) = std::mem::take(&mut buffers.new) {
-        buffers.current = previous_new;
+    if sdfs.len() == 0 || mats.len() == 0 || instances.iter().len() == 0 {
+        buffers.current = None;
+        buffers.new = None;
+        return;
     }
 
-    let mut new_set = None;
+    if let Some(previous_new) = std::mem::take(&mut buffers.new) {
+        buffers.current = Some(previous_new);
+    }
 
-    if sdfs.is_added() || sdf_events.read().last().is_some() {
+    let mut new_buffers = (None, None);
+
+    if buffers.current.is_none() || sdf_events.read().last().is_some() {
         sdf_indices.clear();
-        let mut sdf_buffer: Vec<u8> = Vec::with_capacity(buffers.current.sdfs.size() as usize);
+        let mut sdf_buffer: Vec<u8> = Vec::with_capacity(
+            buffers
+                .current
+                .as_ref()
+                .map(|b| b.sdfs.size() as usize)
+                .unwrap_or(0),
+        );
         for (id, sdf) in sdfs.iter() {
             let AssetId::Index { index, .. } = id else {
                 warn_once!("Only dense asset storage is supported for sdfs");
@@ -162,19 +149,16 @@ fn upload_new_buffers<Material: MarcherMaterial>(
             sdf_buffer.extend([0; 4]);
         }
 
-        new_set = new_set
-            .or_else(|| Some(buffers.current.clone()))
-            .map(|mut s| {
-                s.sdfs = render_device.create_buffer_with_data(&BufferInitDescriptor {
-                    usage: BufferUsages::STORAGE,
-                    label: Some("SDF buffer"),
-                    contents: &sdf_buffer,
-                });
-                s
-            });
+        new_buffers.0 = Some(
+            render_device.create_buffer_with_data(&BufferInitDescriptor {
+                usage: BufferUsages::STORAGE,
+                label: Some("SDF buffer"),
+                contents: &sdf_buffer,
+            }),
+        );
     }
 
-    if mats.is_added() || mat_events.read().last().is_some() {
+    if buffers.current.is_none() || mat_events.read().last().is_some() {
         mat_indices.clear();
         let mut mats_buffer = BufferVec::<Material>::new(BufferUsages::STORAGE);
         for (id, mat) in mats.iter() {
@@ -193,16 +177,11 @@ fn upload_new_buffers<Material: MarcherMaterial>(
             mat_indices[index] = start_offset;
         }
 
-        new_set = new_set
-            .or_else(|| Some(buffers.current.clone()))
-            .map(|mut s| {
-                mats_buffer.write_buffer(&*render_device, &*render_queue);
-                s.materials = mats_buffer.buffer().unwrap().clone();
-                s
-            });
+        mats_buffer.write_buffer(&*render_device, &*render_queue);
+        new_buffers.1 = mats_buffer.buffer().cloned();
     }
 
-    if new_set.is_none() && changed_query.is_empty() {
+    if new_buffers.0.is_none() && new_buffers.1.is_none() && changed_query.is_empty() {
         return;
     }
 
@@ -265,29 +244,46 @@ fn upload_new_buffers<Material: MarcherMaterial>(
         });
     }
 
-    buffers.new = new_set
-        .or_else(|| Some(buffers.current.clone()))
-        .map(|mut s| {
-            instance_buffer.write_buffer(&*render_device, &*render_queue);
-            s.instances = instance_buffer.buffer().unwrap().clone();
-            s
-        });
+    instance_buffer.write_buffer(&*render_device, &*render_queue);
+    let cur_ref = buffers.current.as_ref();
+    buffers.new = Some(BufferSet {
+        sdfs: new_buffers
+            .0
+            .or_else(|| cur_ref.map(|c| c.sdfs.clone()))
+            .unwrap(),
+        materials: new_buffers
+            .1
+            .or_else(|| cur_ref.map(|c| c.materials.clone()))
+            .unwrap(),
+        instances: instance_buffer.buffer().unwrap().clone(),
+    });
 }
 
-fn extract_buffers(buffers: Extract<Res<Buffers>>, mut extracted: ResMut<BufferSet>) {
+fn extract_buffers(buffers: Extract<Res<Buffers>>, mut extracted: ResMut<CurrentBufferSet>) {
+    if buffers.current.is_none() && buffers.new.is_none() {
+        if let Some(previous) = &**extracted {
+            previous.sdfs.destroy();
+            previous.materials.destroy();
+            previous.instances.destroy();
+        }
+        **extracted = None;
+    }
+
     let Some(new_buffers) = &buffers.new else {
         return;
     };
 
-    if new_buffers.sdfs.id() != extracted.sdfs.id() {
-        extracted.sdfs.destroy();
-    }
-    if new_buffers.materials.id() != extracted.materials.id() {
-        extracted.materials.destroy();
-    }
-    if new_buffers.instances.id() != extracted.instances.id() {
-        extracted.instances.destroy();
+    if let Some(previous) = &**extracted {
+        if new_buffers.sdfs.id() != previous.sdfs.id() {
+            previous.sdfs.destroy();
+        }
+        if new_buffers.materials.id() != previous.materials.id() {
+            previous.materials.destroy();
+        }
+        if new_buffers.instances.id() != previous.instances.id() {
+            previous.instances.destroy();
+        }
     }
 
-    *extracted = (*new_buffers).clone();
+    **extracted = Some((*new_buffers).clone());
 }

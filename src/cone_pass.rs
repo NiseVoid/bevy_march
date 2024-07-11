@@ -1,5 +1,5 @@
 use crate::{
-    buffers::{BufferSet, Instance, MaterialSize},
+    buffers::{CurrentBufferSet, Instance, MaterialSize},
     settings::MarcherSettings,
     MarcherScale, CONE_SIZE, WORKGROUP_SIZE,
 };
@@ -210,10 +210,13 @@ fn prepare_bind_group(
     pipeline: Res<RayMarcherPipeline>,
     gpu_images: Res<RenderAssets<GpuImage>>,
     textures: Query<(Entity, &MarcherConeTexture)>,
-    buffer_set: Res<BufferSet>,
+    buffer_set: Res<CurrentBufferSet>,
     render_device: Res<RenderDevice>,
 ) {
     for (entity, texture) in textures.iter() {
+        let Some(buffer_set) = &**buffer_set else {
+            continue;
+        };
         let Some(depth) = gpu_images.get(texture.texture.id()) else {
             continue;
         };
