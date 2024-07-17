@@ -7,7 +7,7 @@ use bevy::{
     input::mouse::MouseMotion,
     math::vec3,
     prelude::*,
-    render::{render_resource::ShaderType, renderer::RenderDevice},
+    render::{render_resource::ShaderType, renderer::RenderDevice, view::RenderLayers},
     sprite::Anchor,
     window::CursorGrabMode,
 };
@@ -26,6 +26,14 @@ fn main() {
     ));
 
     let main_pass_shader = app.world().resource::<AssetServer>().load("benchmark.wgsl");
+
+    app.insert_gizmo_config(
+        DefaultGizmoConfigGroup,
+        GizmoConfig {
+            render_layers: RenderLayers::layer(1),
+            ..default()
+        },
+    );
 
     app.add_plugins(RayMarcherPlugin::<SdfMaterial>::new(main_pass_shader))
         .init_resource::<CursorState>()
@@ -182,6 +190,7 @@ fn setup(
             }),
             ..default()
         },
+        RenderLayers::from_layers(&[0, 1]),
         MarcherSettings::default(),
         MarcherMainTextures::new(&mut images, (8, 8)),
         MarcherConeTexture::new(&mut images, &device, (8, 8)),

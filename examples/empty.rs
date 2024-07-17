@@ -9,7 +9,7 @@ fn main() {
     let mut app = App::new();
     app.add_plugins(DefaultPlugins);
 
-    let main_pass_shader = app.world().resource::<AssetServer>().load("benchmark.wgsl");
+    let main_pass_shader = app.world().resource::<AssetServer>().load("simple.wgsl");
 
     app.add_plugins(RayMarcherPlugin::<SdfMaterial>::new(main_pass_shader))
         .add_systems(Startup, setup)
@@ -20,7 +20,6 @@ fn main() {
 struct SdfMaterial {
     base_color: Vec3,
     emissive: Vec3,
-    reflective: f32,
 }
 
 impl MarcherMaterial for SdfMaterial {}

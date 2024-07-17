@@ -24,8 +24,8 @@ fn get_color(march: MarchSettings, res: MarchResult) -> vec3<f32> {
         return skybox(march.direction);
     }
 
-    let hit = march.origin + march.direction * (res.traveled - 0.01);
-    let normal = calc_normal(hit, march.ignored);
+    let hit = march.origin + march.direction * (res.traveled - 0.02);
+    let normal = calc_normal(res.id, hit);
     var diffuse = dot(normal, -settings.light_dir);
 
     var material = materials[res.material];
@@ -36,19 +36,21 @@ fn get_color(march: MarchSettings, res: MarchResult) -> vec3<f32> {
         let base_color = base_strength * material.base_color;
 
         // TODO: Make reflections less boilerplate heavy
-        var reflected: MarchSettings;
+        var reflected = march;
         reflected.origin = march.origin + march.direction * res.traveled;
         reflected.direction = reflect(march.direction, normal);
+        reflected.start = 0.;
         reflected.limit = settings.far - res.traveled;
         reflected.ignored = res.id;
         let res = march_ray(reflected);
         let refl_mat = materials[res.material];
+
         if res.distance < 0.1 {
             emission += refl_mat.emissive * material.reflective;
             albedo = base_color + refl_mat.base_color * material.reflective;
 
-            let reflected_hit = hit + reflected.direction * (res.traveled - 0.01);
-            let reflected_normal = calc_normal(reflected_hit, reflected.ignored);
+            let reflected_hit = reflected.origin + reflected.direction * (res.traveled - 0.01);
+            let reflected_normal = calc_normal(res.id, reflected_hit);
             diffuse = max(dot(reflected_normal, -settings.light_dir), 0.);
         } else {
             albedo = base_color + skybox(reflected.direction) * material.reflective;

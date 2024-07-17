@@ -4,7 +4,7 @@ use std::{marker::PhantomData, num::NonZeroU64};
 
 use bevy::{
     asset::AssetEvents,
-    math::vec3,
+    math::{vec3, Vec3A},
     prelude::*,
     render::{
         render_resource::{Buffer, BufferInitDescriptor, BufferUsages, BufferVec, ShaderType},
@@ -12,7 +12,8 @@ use bevy::{
         Extract, RenderApp,
     },
 };
-use bevy_prototype_sdf::Sdf3d;
+use bevy_prototype_sdf::{Sdf3d, SdfBounding};
+use ploc_bvh::dim3::{Aabb3d, BoundingVolume, BvhAabb3d};
 
 pub struct BufferPlugin<Material: MarcherMaterial> {
     _phantom: PhantomData<Material>,
@@ -31,6 +32,8 @@ impl<Material: MarcherMaterial> Plugin for BufferPlugin<Material> {
         app.add_systems(Last, upload_new_buffers::<Material>.after(AssetEvents))
             .init_resource::<SdfIndices>()
             .init_resource::<MaterialIndices>();
+
+        app.init_resource::<CurrentBvh>();
 
         app.sub_app_mut(RenderApp)
             .insert_resource(MaterialSize(Material::min_size()))
@@ -54,6 +57,9 @@ pub struct Buffers {
     new: Option<BufferSet>,
 }
 
+#[derive(Resource, Default, Deref, DerefMut)]
+pub struct CurrentBvh(BvhAabb3d<usize>);
+
 #[derive(Resource, Deref, DerefMut, Default, Debug)]
 pub struct CurrentBufferSet(Option<BufferSet>);
 
@@ -61,6 +67,7 @@ pub struct CurrentBufferSet(Option<BufferSet>);
 pub struct BufferSet {
     pub sdfs: Buffer,
     pub materials: Buffer,
+    pub nodes: Buffer,
     pub instances: Buffer,
 }
 
@@ -71,7 +78,7 @@ pub struct SdfIndices(Vec<u32>);
 pub struct MaterialIndices(Vec<u32>);
 
 // TODO: This type becomes 80 bytes on the GPU, investigate performance of alternatives
-#[derive(ShaderType)]
+#[derive(ShaderType, Clone)]
 pub struct Instance {
     sdf_index: u32,
     mat_index: u32,
@@ -80,8 +87,17 @@ pub struct Instance {
     matrix: Mat3,
 }
 
+#[derive(ShaderType)]
+pub struct BvhNode {
+    min: Vec3,
+    count: u32,
+    max: Vec3,
+    index: u32,
+}
+
+// TODO: Not pub
 // TODO: We can probably split this up into three systems each with different scheduling constraints
-fn upload_new_buffers<Material: MarcherMaterial>(
+pub fn upload_new_buffers<Material: MarcherMaterial>(
     mut buffers: ResMut<Buffers>,
     mut sdf_events: EventReader<AssetEvent<Sdf3d>>,
     sdfs: Res<Assets<Sdf3d>>,
@@ -100,6 +116,7 @@ fn upload_new_buffers<Material: MarcherMaterial>(
         )>,
     >,
     instances: Query<(&Handle<Sdf3d>, &Handle<Material>, &GlobalTransform)>,
+    mut current_bvh: ResMut<CurrentBvh>,
 ) {
     if sdfs.len() == 0 || mats.len() == 0 || instances.iter().len() == 0 {
         buffers.current = None;
@@ -185,66 +202,97 @@ fn upload_new_buffers<Material: MarcherMaterial>(
         return;
     }
 
-    let mut instance_buffer = BufferVec::<Instance>::new(BufferUsages::STORAGE);
-    for (sdf, mat, transform) in instances.iter() {
-        let AssetId::Index { index, .. } = sdf.id() else {
-            continue;
-        };
-        let index = (index.to_bits() & (u32::MAX as u64)) as usize;
-        let sdf_index = sdf_indices[index];
+    let mut unordered_instances = Vec::<Instance>::with_capacity(instances.iter().len());
+    let bvh = BvhAabb3d::new(
+        instances.iter().len(),
+        instances.iter().filter_map(|(sdf, mat, transform)| {
+            let AssetId::Index { index, .. } = sdf.id() else {
+                return None;
+            };
+            let index = (index.to_bits() & (u32::MAX as u64)) as usize;
+            let sdf_index = sdf_indices[index];
+            let sdf = sdfs.get(sdf.id()).unwrap();
 
-        let AssetId::Index { index, .. } = mat.id() else {
-            continue;
-        };
-        let index = (index.to_bits() & (u32::MAX as u64)) as usize;
-        let mat_index = mat_indices[index];
+            let AssetId::Index { index, .. } = mat.id() else {
+                return None;
+            };
+            let index = (index.to_bits() & (u32::MAX as u64)) as usize;
+            let mat_index = mat_indices[index];
 
-        let matrix = transform.affine().matrix3;
-        let matrix_transpose = matrix.transpose();
-        let difference = matrix * matrix_transpose;
-        if difference.x_axis.yz().max_element() > 0.0001
-            || difference.y_axis.xz().max_element() > 0.0001
-            || difference.z_axis.xy().max_element() > 0.0001
-        {
-            warn!(
-                "GlobalTransform can only contain translation, rotation and uniform scale.
+            let matrix = transform.affine().matrix3;
+            let matrix_transpose = matrix.transpose();
+            let difference = matrix * matrix_transpose;
+            if difference.x_axis.yz().max_element() > 0.0001
+                || difference.y_axis.xz().max_element() > 0.0001
+                || difference.z_axis.xy().max_element() > 0.0001
+            {
+                warn!(
+                    "GlobalTransform can only contain translation, rotation and uniform scale.
                 Expected uniformly scaled matrix after canceling rotation but got {:?}",
-                difference
+                    difference
+                );
+                return None;
+            }
+
+            let squared_scale = vec3(
+                difference.x_axis.x,
+                difference.y_axis.y,
+                difference.z_axis.z,
             );
-            continue;
-        }
+            if (squared_scale.x - squared_scale.y).abs() > 0.0001
+                || (squared_scale.x - squared_scale.z).abs() > 0.0001
+            {
+                warn!(
+                    "Non-uniform scaling is not supported, but found scale: {:?}",
+                    Vec3::from(squared_scale.to_array().map(|f| f.sqrt()))
+                );
+                return None;
+            }
 
-        let squared_scale = vec3(
-            difference.x_axis.x,
-            difference.y_axis.y,
-            difference.z_axis.z,
-        );
-        if (squared_scale.x - squared_scale.y).abs() > 0.0001
-            || (squared_scale.x - squared_scale.z).abs() > 0.0001
-        {
-            warn!(
-                "Non-uniform scaling is not supported, but found scale: {:?}",
-                Vec3::from(squared_scale.to_array().map(|f| f.sqrt()))
+            let scale = squared_scale.x.sqrt();
+            let inv_scale = scale.recip();
+
+            let translation = transform.translation_vec3a();
+            let rot_matrix = matrix * inv_scale;
+            let rotation = Quat::from_mat3a(&rot_matrix);
+            let matrix = matrix_transpose * (inv_scale * inv_scale);
+
+            let instance_index = unordered_instances.len();
+            unordered_instances.push(Instance {
+                sdf_index,
+                mat_index,
+                scale,
+                translation: translation.into(),
+                matrix: matrix.into(),
+            });
+
+            let aabb = sdf.aabb(default(), rotation);
+            let scaled_aabb = Aabb3d::new(
+                aabb.center() * scale + translation,
+                (aabb.half_size() * scale).min(Vec3A::splat(1e9)),
             );
-            continue;
-        }
+            Some((instance_index, scaled_aabb))
+        }),
+    );
 
-        let scale = squared_scale.x.sqrt();
-        let inv_scale = scale.recip();
-
-        let translation = transform.translation();
-        let matrix = matrix_transpose * (inv_scale * inv_scale);
-
-        instance_buffer.push(Instance {
-            sdf_index,
-            mat_index,
-            scale,
-            translation,
-            matrix: matrix.into(),
+    let mut nodes = BufferVec::<BvhNode>::new(BufferUsages::STORAGE);
+    bvh.nodes().for_each(|n| {
+        nodes.push(BvhNode {
+            min: n.volume.min.into(),
+            max: n.volume.max.into(),
+            count: n.count,
+            index: n.start_index,
         });
-    }
+    });
+    nodes.write_buffer(&*render_device, &*render_queue);
 
+    let mut instance_buffer = BufferVec::<Instance>::new(BufferUsages::STORAGE);
+    bvh.items().for_each(|i| {
+        instance_buffer.push(unordered_instances[i.t].clone());
+    });
     instance_buffer.write_buffer(&*render_device, &*render_queue);
+    **current_bvh = bvh;
+
     let cur_ref = buffers.current.as_ref();
     buffers.new = Some(BufferSet {
         sdfs: new_buffers
@@ -255,6 +303,7 @@ fn upload_new_buffers<Material: MarcherMaterial>(
             .1
             .or_else(|| cur_ref.map(|c| c.materials.clone()))
             .unwrap(),
+        nodes: nodes.buffer().unwrap().clone(),
         instances: instance_buffer.buffer().unwrap().clone(),
     });
 }

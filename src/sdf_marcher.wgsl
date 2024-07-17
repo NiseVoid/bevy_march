@@ -14,8 +14,16 @@ struct RayMarcherSettings {
 
 @group(1) @binding(0) var depth_texture: texture_storage_2d<r32float, write>;
 @group(1) @binding(2) var<storage, read> shape_data: array<u32>;
-@group(1) @binding(4) var<storage, read> instances: array<Instance>;
-@group(1) @binding(5) var cone_texture: texture_storage_2d<r32float, read>;
+@group(1) @binding(4) var<storage, read> nodes: array<BvhNode>;
+@group(1) @binding(5) var<storage, read> instances: array<Instance>;
+@group(1) @binding(6) var cone_texture: texture_storage_2d<r32float, read>;
+
+struct BvhNode {
+    min: vec3<f32>,
+    count: u32,
+    max: vec3<f32>,
+    index: u32,
+}
 
 struct Instance {
     shape_offset: u32,
@@ -38,7 +46,8 @@ fn get_initial_settings(screen_uv: vec2<f32>, start: f32) -> MarchSettings {
     march.direction = get_ray_dir(screen_uv);
     march.start = max(start, settings.near);
     march.limit = settings.far;
-    march.ignored = 999999999u;
+    march.ignored = PLACEHOLDER_ID;
+    march.scale = 1.;
     return march;
 }
 
@@ -48,6 +57,7 @@ struct MarchSettings {
     start: f32,
     limit: f32,
     ignored: u32,
+    scale: f32,
 }
 
 struct MarchResult {
@@ -59,26 +69,39 @@ struct MarchResult {
 }
 
 fn march_ray(march: MarchSettings) -> MarchResult {
+    let epsilon_per_dist = march.scale * 0.001;
+    let min_epsilon = march.scale * 0.002;
+    let max_epsilon = march.scale * 0.02;
+
     var traveled = march.start;
-    var tint = vec3<f32>(1.);
-    var res: Sdf;
+    var res: NearestSdf;
+    res.dist = 1e9;
+    var step = 0.;
     var i: u32;
     for (i = 0u; i < 128u; i++) {
         let pos = march.origin + march.direction * traveled;
-        res = get_scene_dist(pos, march.ignored);
+        var max_step = 1e9;
+        if res.next <= max_epsilon {
+            res = get_nearest(res.dist + step, pos, march.ignored);
+        } else {
+            res.dist = to_instance(res.id, pos);
+            max_step = res.next;
+        }
 
-        let epsilon = clamp(traveled * 0.001, 0.001, 0.02);
+        let epsilon = clamp(traveled * epsilon_per_dist, min_epsilon, max_epsilon);
         if traveled > march.limit || res.dist < epsilon {
             break;
         }
 
-        traveled += max(res.dist, epsilon);
+        step = max(min(res.dist, max_step), epsilon);
+        res.next -= step;
+        traveled += step;
     }
 
     var result: MarchResult;
     result.steps = i;
     result.traveled = traveled;
-    if result.distance > 0.03 || traveled > march.limit {
+    if result.distance > march.scale*0.03 || traveled > march.limit {
         result.traveled = 9999999.;
     }
     result.distance = res.dist;
@@ -109,62 +132,124 @@ fn get_occlusion(point: vec3<f32>, normal: vec3<f32>) -> f32 {
         let step = f32(i);
         let from_point = step * step_dist;
         let pos = point + normal * from_point;
-        let res = get_scene_dist(pos, 999999999u);
+        let dist = single_dist(pos, 999999999u, from_point + 0.02);
 
-        occlusion -= saturate(from_point - res.dist) / step;
+        occlusion -= saturate(from_point - dist) / step;
     }
 
     return saturate(occlusion);
 }
 
-fn calc_normal(p: vec3<f32>, ignore: u32) -> vec3<f32> {
+fn calc_normal(id: u32, p: vec3<f32>) -> vec3<f32> {
     let eps = 0.0001;
     let h = vec2<f32>(eps, 0.);
     return normalize(vec3<f32>(
-        get_scene_dist(p+h.xyy, ignore).dist - get_scene_dist(p - h.xyy, ignore).dist,
-        get_scene_dist(p+h.yxy, ignore).dist - get_scene_dist(p - h.yxy, ignore).dist,
-        get_scene_dist(p+h.yyx, ignore).dist - get_scene_dist(p - h.yyx, ignore).dist,
+        to_instance(id, p+h.xyy) - to_instance(id, p - h.xyy),
+        to_instance(id, p+h.yxy) - to_instance(id, p - h.yxy),
+        to_instance(id, p+h.yyx) - to_instance(id, p - h.yyx),
     ));
 }
 
-struct Sdf {
+fn single_dist(pos: vec3<f32>, ignore: u32, max_dist: f32) -> f32 {
+    return get_nearest(max_dist, pos, ignore).dist;
+}
+
+struct NearestSdf {
     dist: f32,
     mat: u32,
     id: u32,
+    next: f32,
 }
 
-fn sdf_min(a: Sdf, b: Sdf) -> Sdf {
-    if a.dist <= b.dist {
-        return a;
+fn sdf_min(prev: NearestSdf, next_dist: f32, next_mat: u32, next_id: u32) -> NearestSdf {
+    var res: NearestSdf;
+    if prev.id != PLACEHOLDER_ID && prev.dist < next_dist {
+        res.dist = prev.dist;
+        res.mat = prev.mat;
+        res.id = prev.id;
+        res.next = min(prev.next, next_dist);
+    } else {
+        res.dist = next_dist;
+        res.mat = next_mat;
+        res.id = next_id;
+        res.next = prev.dist;
     }
-    return b;
+    return res;
 }
 
-fn get_scene_dist(pos: vec3<f32>, ignored: u32) -> Sdf {
-    var res: Sdf;
-    res.dist = 1e9;
-    res.id = 999999999u;
+const PLACEHOLDER_ID: u32 = 999999999u;
 
-    let instance_count = arrayLength(&instances);
-    if instance_count == 0 {
-        return res;
-    }
+fn get_nearest(limit: f32, pos: vec3<f32>, ignored: u32) -> NearestSdf {
+    var res: NearestSdf;
+    res.dist = limit;
+    res.id = PLACEHOLDER_ID;
+    res.next = limit;
 
-    for (var i = 0u; i < instance_count; i++) {
-        if i == ignored {
+    var stack: array<u32, 16>;
+    stack[0] = 0u;
+    var stackLocation = 1u;
+
+    while true {
+        if stackLocation == 0 {
+            break;
+        }
+        stackLocation -= 1u;
+        let node = nodes[stack[stackLocation]];
+
+        let min = res.next+0.001;
+        let c = max(min(pos, node.max), node.min);
+        let dist_sq = len_sq(c - pos);
+        if dist_sq - min * min > 0. {
+            if res.next*res.next > dist_sq {
+                res.next = sqrt(dist_sq);
+            }
             continue;
         }
-        let instance = instances[i];
-        let relative_pos = instance.matrix * (pos - instance.translation);
-        var current: Sdf;
-        current.dist = sdf(relative_pos, instance.shape_offset) * instance.scale;
-        current.mat = instance.material;
-        current.id = i;
 
-        res = sdf_min(res, current);
+        if node.count == 0 {
+            let left = nodes[node.index];
+            let right = nodes[node.index+1];
+            let lc = max(min(pos, left.max), left.min);
+            let rc = max(min(pos, right.max), right.min);
+            let ldist = len_sq(lc - pos);
+            let rdist = len_sq(rc - pos);
+            if ldist > rdist {
+                stack[stackLocation] = node.index;
+                stack[stackLocation+1] = node.index+1;
+                stackLocation += 2u;
+            } else {
+                stack[stackLocation] = node.index+1;
+                stack[stackLocation+1] = node.index;
+                stackLocation += 2u;
+            }
+
+            continue;
+        }
+
+        for (var i = 0u; i < node.count; i++) {
+            let instance_id = node.index + i;
+            if instance_id == ignored {
+                continue;
+            }
+            let instance = instances[instance_id];
+            let relative_pos = instance.matrix * (pos - instance.translation);
+            let dist = sdf(relative_pos, instance.shape_offset) * instance.scale;
+
+            res = sdf_min(res, dist, instance.material, instance_id);
+        }
     }
 
     return res;
+}
+
+fn to_instance(instance_id: u32, pos: vec3<f32>) -> f32 {
+    let instance = instances[instance_id];
+    let relative_pos = instance.matrix * (pos - instance.translation);
+    return sdf(relative_pos, instance.shape_offset) * instance.scale;
+}
+
+fn len_sq(v: vec3<f32>) -> f32 {
+    return dot(v, v);
 }
 
 fn sdf(pos: vec3<f32>, start: u32) -> f32 {
@@ -219,6 +304,7 @@ fn sd_extrude(pos: vec3<f32>, half_height: f32, shape_kind: u32, offset: u32) ->
 
     return min(max(w.x, w.y), 0.) + length(max(w, vec2<f32>(0.)));
 }
+
 fn sdf2d(pos: vec2<f32>, shape_kind: u32, offset: u32) -> f32 {
     if shape_kind == 3 {
         let radius = bitcast<f32>(shape_data[offset]);

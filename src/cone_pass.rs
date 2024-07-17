@@ -1,5 +1,5 @@
 use crate::{
-    buffers::{CurrentBufferSet, Instance, MaterialSize},
+    buffers::{BvhNode, CurrentBufferSet, Instance, MaterialSize},
     settings::MarcherSettings,
     MarcherScale, CONE_SIZE, WORKGROUP_SIZE,
 };
@@ -228,6 +228,7 @@ fn prepare_bind_group(
                 &depth.texture_view,
                 buffer_set.sdfs.as_entire_binding(),
                 buffer_set.materials.as_entire_binding(),
+                buffer_set.nodes.as_entire_binding(),
                 buffer_set.instances.as_entire_binding(),
                 texture.uv_scale.as_entire_binding(),
             )),
@@ -271,6 +272,8 @@ impl FromWorld for RayMarcherPipeline {
                     storage_buffer_read_only::<u32>(false),
                     // Materials
                     storage_buffer_read_only_sized(false, Some(mat_size)),
+                    // Nodes
+                    storage_buffer_read_only::<BvhNode>(false),
                     // Instances
                     storage_buffer_read_only::<Instance>(false),
                     // UV scale
