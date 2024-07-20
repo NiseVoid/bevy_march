@@ -1,5 +1,5 @@
 use crate::{
-    buffers::{BvhNode, CurrentBufferSet, Instance, MaterialSize},
+    buffers::{BufferLayout, MarcherStorageBindGroup},
     settings::MarcherSettings,
     MarcherScale, CONE_SIZE, WORKGROUP_SIZE,
 };
@@ -19,10 +19,7 @@ use bevy::{
             NodeRunError, RenderGraphApp, RenderGraphContext, RenderLabel, ViewNode, ViewNodeRunner,
         },
         render_resource::{
-            binding_types::{
-                storage_buffer_read_only, storage_buffer_read_only_sized, texture_storage_2d,
-                uniform_buffer,
-            },
+            binding_types::{storage_buffer_read_only, texture_storage_2d, uniform_buffer},
             BindGroup, BindGroupEntries, BindGroupLayout, BindGroupLayoutEntries, Buffer,
             BufferInitDescriptor, BufferUsages, CachedComputePipelineId, ComputePassDescriptor,
             ComputePipelineDescriptor, Extent3d, PipelineCache, ShaderStages, StorageTextureAccess,
@@ -154,13 +151,17 @@ fn resize_texture(
 pub struct MarcherConePass;
 
 impl ViewNode for MarcherConePass {
-    type ViewQuery = (&'static MarcherSettings, &'static MarcherStorageBindGroup);
+    type ViewQuery = (
+        &'static MarcherSettings,
+        &'static MarcherTextureBindGroup,
+        &'static MarcherStorageBindGroup,
+    );
 
     fn run(
         &self,
         _graph: &mut RenderGraphContext,
         render_context: &mut RenderContext,
-        (_settings, texture_bind_group): QueryItem<Self::ViewQuery>,
+        (_settings, texture_bind_group, storage_bind_group): QueryItem<Self::ViewQuery>,
         world: &World,
     ) -> Result<(), NodeRunError> {
         let ray_marcher_pipeline = world.resource::<RayMarcherPipeline>();
@@ -187,6 +188,7 @@ impl ViewNode for MarcherConePass {
 
         pass.set_bind_group(0, &settings_bind_group, &[]);
         pass.set_bind_group(1, &texture_bind_group.bind_group, &[]);
+        pass.set_bind_group(2, &**storage_bind_group, &[]);
         pass.set_pipeline(pipeline);
         pass.dispatch_workgroups(
             texture_bind_group.size.x.div_ceil(WORKGROUP_SIZE),
@@ -198,9 +200,8 @@ impl ViewNode for MarcherConePass {
     }
 }
 
-// TODO: Split data shared between passes and data that's unique to each pass
 #[derive(Component)]
-pub struct MarcherStorageBindGroup {
+pub struct MarcherTextureBindGroup {
     bind_group: BindGroup,
     size: UVec2,
 }
@@ -210,30 +211,21 @@ fn prepare_bind_group(
     pipeline: Res<RayMarcherPipeline>,
     gpu_images: Res<RenderAssets<GpuImage>>,
     textures: Query<(Entity, &MarcherConeTexture)>,
-    buffer_set: Res<CurrentBufferSet>,
     render_device: Res<RenderDevice>,
 ) {
     for (entity, texture) in textures.iter() {
-        let Some(buffer_set) = &**buffer_set else {
-            continue;
-        };
         let Some(depth) = gpu_images.get(texture.texture.id()) else {
             continue;
         };
         let bind_group = render_device.create_bind_group(
             None,
-            &pipeline.storage_layout,
+            &pipeline.texture_layout,
             &BindGroupEntries::sequential((
                 &depth.texture_view,
-                &depth.texture_view,
-                buffer_set.sdfs.as_entire_binding(),
-                buffer_set.materials.as_entire_binding(),
-                buffer_set.nodes.as_entire_binding(),
-                buffer_set.instances.as_entire_binding(),
                 texture.uv_scale.as_entire_binding(),
             )),
         );
-        commands.entity(entity).insert(MarcherStorageBindGroup {
+        commands.entity(entity).insert(MarcherTextureBindGroup {
             bind_group,
             size: depth.size,
         });
@@ -243,13 +235,12 @@ fn prepare_bind_group(
 #[derive(Resource)]
 struct RayMarcherPipeline {
     settings_layout: BindGroupLayout,
-    storage_layout: BindGroupLayout,
+    texture_layout: BindGroupLayout,
     pipeline_id: CachedComputePipelineId,
 }
 
 impl FromWorld for RayMarcherPipeline {
     fn from_world(world: &mut World) -> Self {
-        let mat_size = **world.resource::<MaterialSize>();
         let render_device = world.resource::<RenderDevice>();
 
         let settings_layout = render_device.create_bind_group_layout(
@@ -260,27 +251,18 @@ impl FromWorld for RayMarcherPipeline {
             ),
         );
         let storage_layout = render_device.create_bind_group_layout(
-            "marcher_storage_bind_group_layout",
+            "marcher_cone_pass_bind_group_layout",
             &BindGroupLayoutEntries::sequential(
                 ShaderStages::COMPUTE,
                 (
                     // Depth texture
                     texture_storage_2d(TextureFormat::R32Float, StorageTextureAccess::WriteOnly),
-                    // TODO: Make bind groups reusable so we don't need this as padding
-                    texture_storage_2d(TextureFormat::R32Float, StorageTextureAccess::WriteOnly),
-                    // SDFs
-                    storage_buffer_read_only::<u32>(false),
-                    // Materials
-                    storage_buffer_read_only_sized(false, Some(mat_size)),
-                    // Nodes
-                    storage_buffer_read_only::<BvhNode>(false),
-                    // Instances
-                    storage_buffer_read_only::<Instance>(false),
                     // UV scale
                     storage_buffer_read_only::<Vec2>(false),
                 ),
             ),
         );
+        let buffer_layout = (*world.resource::<BufferLayout>()).clone();
 
         let shader = world
             .resource::<AssetServer>()
@@ -290,7 +272,11 @@ impl FromWorld for RayMarcherPipeline {
             .resource_mut::<PipelineCache>()
             .queue_compute_pipeline(ComputePipelineDescriptor {
                 label: Some("cone_marcher_pipeline".into()),
-                layout: vec![settings_layout.clone(), storage_layout.clone()],
+                layout: vec![
+                    settings_layout.clone(),
+                    storage_layout.clone(),
+                    buffer_layout,
+                ],
                 push_constant_ranges: Vec::new(),
                 shader: shader.clone(),
                 shader_defs: vec![],
@@ -299,7 +285,7 @@ impl FromWorld for RayMarcherPipeline {
 
         Self {
             settings_layout,
-            storage_layout,
+            texture_layout: storage_layout,
             pipeline_id,
         }
     }

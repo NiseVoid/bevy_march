@@ -1,8 +1,7 @@
 #import bevy_march::{get_initial_settings, settings, NearestSdf, get_nearest, to_instance, get_ray_dir, PLACEHOLDER_ID};
 
 @group(1) @binding(0) var cone_texture: texture_storage_2d<r32float, write>;
-@group(1) @binding(3) var<storage, read> materials: array<Material>;
-@group(1) @binding(6) var<storage, read> uv_scale: vec2<f32>;
+@group(1) @binding(1) var<storage, read> uv_scale: vec2<f32>;
 
 struct Material {
     base_color: vec3<f32>,

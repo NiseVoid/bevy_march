@@ -1,4 +1,4 @@
-use crate::MarcherMaterial;
+use crate::{MarcherMaterial, MarcherSettings};
 
 use std::{marker::PhantomData, num::NonZeroU64};
 
@@ -7,9 +7,13 @@ use bevy::{
     math::{vec3, Vec3A},
     prelude::*,
     render::{
-        render_resource::{Buffer, BufferInitDescriptor, BufferUsages, BufferVec, ShaderType},
+        render_resource::{
+            binding_types::{storage_buffer_read_only, storage_buffer_read_only_sized},
+            BindGroup, BindGroupEntries, BindGroupLayout, BindGroupLayoutEntries, Buffer,
+            BufferInitDescriptor, BufferUsages, BufferVec, ShaderStages, ShaderType,
+        },
         renderer::{RenderDevice, RenderQueue},
-        Extract, RenderApp,
+        Extract, Render, RenderApp, RenderSet,
     },
 };
 use bevy_prototype_sdf::{Sdf3d, SdfBounding};
@@ -37,19 +41,24 @@ impl<Material: MarcherMaterial> Plugin for BufferPlugin<Material> {
 
         app.sub_app_mut(RenderApp)
             .insert_resource(MaterialSize(Material::min_size()))
-            .add_systems(ExtractSchedule, extract_buffers);
+            .add_systems(ExtractSchedule, extract_buffers)
+            .add_systems(
+                Render,
+                prepare_bind_group.in_set(RenderSet::PrepareBindGroups),
+            );
     }
 
     fn finish(&self, app: &mut App) {
         app.init_resource::<Buffers>();
 
         app.sub_app_mut(RenderApp)
+            .init_resource::<BufferLayout>()
             .init_resource::<CurrentBufferSet>();
     }
 }
 
 #[derive(Resource, Deref)]
-pub struct MaterialSize(NonZeroU64);
+struct MaterialSize(NonZeroU64);
 
 #[derive(Resource, Default)]
 pub struct Buffers {
@@ -57,11 +66,12 @@ pub struct Buffers {
     new: Option<BufferSet>,
 }
 
+// TODO: Not pub
 #[derive(Resource, Default, Deref, DerefMut)]
 pub struct CurrentBvh(BvhAabb3d<usize>);
 
 #[derive(Resource, Deref, DerefMut, Default, Debug)]
-pub struct CurrentBufferSet(Option<BufferSet>);
+struct CurrentBufferSet(Option<BufferSet>);
 
 #[derive(Clone, Debug)]
 pub struct BufferSet {
@@ -335,4 +345,62 @@ fn extract_buffers(buffers: Extract<Res<Buffers>>, mut extracted: ResMut<Current
     }
 
     **extracted = Some((*new_buffers).clone());
+}
+
+#[derive(Resource, Deref)]
+pub struct BufferLayout(BindGroupLayout);
+
+impl FromWorld for BufferLayout {
+    fn from_world(world: &mut World) -> Self {
+        let mat_size = **world.resource::<MaterialSize>();
+        let render_device = world.resource::<RenderDevice>();
+
+        let storage_layout = render_device.create_bind_group_layout(
+            "marcher_storage_bind_group_layout",
+            &BindGroupLayoutEntries::sequential(
+                ShaderStages::COMPUTE,
+                (
+                    // SDFs
+                    storage_buffer_read_only::<u32>(false),
+                    // Materials
+                    storage_buffer_read_only_sized(false, Some(mat_size)),
+                    // Nodes
+                    storage_buffer_read_only::<BvhNode>(false),
+                    // Instances
+                    storage_buffer_read_only::<Instance>(false),
+                ),
+            ),
+        );
+        Self(storage_layout)
+    }
+}
+
+#[derive(Component, Deref)]
+pub struct MarcherStorageBindGroup(BindGroup);
+
+fn prepare_bind_group(
+    mut commands: Commands,
+    marchers: Query<Entity, With<MarcherSettings>>,
+    buffer_set: Res<CurrentBufferSet>,
+    render_device: Res<RenderDevice>,
+    buffer_layout: Res<BufferLayout>,
+) {
+    for entity in marchers.iter() {
+        let Some(buffer_set) = &**buffer_set else {
+            continue;
+        };
+        let bind_group = render_device.create_bind_group(
+            None,
+            &buffer_layout,
+            &BindGroupEntries::sequential((
+                buffer_set.sdfs.as_entire_binding(),
+                buffer_set.materials.as_entire_binding(),
+                buffer_set.nodes.as_entire_binding(),
+                buffer_set.instances.as_entire_binding(),
+            )),
+        );
+        commands
+            .entity(entity)
+            .insert(MarcherStorageBindGroup(bind_group));
+    }
 }

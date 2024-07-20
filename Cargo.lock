@@ -651,11 +651,9 @@ dependencies = [
 [[package]]
 name = "bevy_prototype_sdf"
 version = "0.1.0"
-source = "git+https://github.com/NiseVoid/bevy_prototype_sdf#3ce2d4f83a3153d922d23d5bc292ebdea454edd6"
+source = "git+https://github.com/NiseVoid/bevy_prototype_sdf#ab246c0ebd6557959318d1f8993d30e075876645"
 dependencies = [
- "bevy_asset",
- "bevy_math",
- "bevy_reflect",
+ "bevy",
 ]
 
 [[package]]
@@ -2410,6 +2408,7 @@ checksum = "d231b230927b5e4ad203db57bbcbee2802f6bce620b1e4a9024a07d94e2907ec"
 [[package]]
 name = "ploc-bvh"
 version = "0.2.0"
+source = "git+https://github.com/NiseVoid/ploc-bvh#5eec98736ff52fc646e992d25a232d60dcc8e5a4"
 dependencies = [
  "bevy_math",
  "radsort",

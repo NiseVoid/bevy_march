@@ -8,7 +8,6 @@ use bevy::{
         RenderApp,
     },
 };
-use bevy_prototype_sdf::Sdf3d;
 
 // TODO: We only need to re-render if any of the buffers change, the light changes, or the camera is moved
 // TODO: Document everything and warn(missing_docs)
@@ -62,6 +61,7 @@ impl<Material: MarcherMaterial> RayMarcherPlugin<Material> {
 
 impl<Material: MarcherMaterial> Plugin for RayMarcherPlugin<Material> {
     fn build(&self, app: &mut App) {
+        app.add_plugins(bevy_prototype_sdf::SdfPlugin);
         embedded_asset!(app, "sdf_marcher.wgsl");
         std::mem::forget(
             app.world()
@@ -74,8 +74,7 @@ impl<Material: MarcherMaterial> Plugin for RayMarcherPlugin<Material> {
             bvh_gizmos.after(buffers::upload_new_buffers::<Material>),
         );
 
-        app.init_asset::<Sdf3d>()
-            .init_asset::<Material>()
+        app.init_asset::<Material>()
             .add_plugins((
                 BufferPlugin::<Material>::default(),
                 ConePassPlugin,

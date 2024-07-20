@@ -28,7 +28,7 @@ bevy = {version = "0.14.0", default-features = false, features = [
   # TODO: Don't
   "bevy_gizmos",
 ]}
-bevy_prototype_sdf = { git = "https://github.com/NiseVoid/bevy_prototype_sdf", default-features=false, features = ["bevy_asset"]}
+bevy_prototype_sdf = { git = "https://github.com/NiseVoid/bevy_prototype_sdf", default-features=false, features = ["bevy_asset", "shader"]}
 ploc-bvh = "0.2"
 
 [dev-dependencies]
@@ -51,4 +51,4 @@ bevy = {version = "0.14.0", default-features = false, features = [
 ]}
 
 [patch.crates-io]
-ploc-bvh = { path = "../ploc-bvh" }
+ploc-bvh = { git = "https://github.com/NiseVoid/ploc-bvh" }

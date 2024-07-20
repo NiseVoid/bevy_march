@@ -1,7 +1,7 @@
 #import bevy_march::{get_individual_ray, march_ray, settings, calc_normal, get_occlusion, MarchSettings, MarchResult, depth_texture};
 
-@group(1) @binding(1) var color_texture: texture_storage_2d<rgba16float, write>;
-@group(1) @binding(3) var<storage, read> materials: array<Material>;
+@group(1) @binding(2) var color_texture: texture_storage_2d<rgba16float, write>;
+@group(2) @binding(1) var<storage, read> materials: array<Material>;
 
 struct Material {
     base_color: vec3<f32>,
