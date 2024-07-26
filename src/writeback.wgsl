@@ -17,5 +17,6 @@ fn fragment(in: FullscreenVertexOutput) -> FragmentOutput {
     if out.color.a == 0. {
         discard;
     }
+    out.color = vec4<f32>(out.color.rgb / out.color.a, 1.);
     return out;
 }
