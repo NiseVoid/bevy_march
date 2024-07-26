@@ -37,8 +37,6 @@ impl<Material: MarcherMaterial> Plugin for BufferPlugin<Material> {
             .init_resource::<SdfIndices>()
             .init_resource::<MaterialIndices>();
 
-        app.init_resource::<CurrentBvh>();
-
         app.sub_app_mut(RenderApp)
             .insert_resource(MaterialSize(Material::min_size()))
             .add_systems(ExtractSchedule, extract_buffers)
@@ -65,10 +63,6 @@ pub struct Buffers {
     current: Option<BufferSet>,
     new: Option<BufferSet>,
 }
-
-// TODO: Not pub
-#[derive(Resource, Default, Deref, DerefMut)]
-pub struct CurrentBvh(BvhAabb3d<usize>);
 
 #[derive(Resource, Deref, DerefMut, Default, Debug)]
 struct CurrentBufferSet(Option<BufferSet>);
@@ -105,9 +99,8 @@ pub struct BvhNode {
     index: u32,
 }
 
-// TODO: Not pub
 // TODO: We can probably split this up into three systems each with different scheduling constraints
-pub fn upload_new_buffers<Material: MarcherMaterial>(
+fn upload_new_buffers<Material: MarcherMaterial>(
     mut buffers: ResMut<Buffers>,
     mut sdf_events: EventReader<AssetEvent<Sdf3d>>,
     sdfs: Res<Assets<Sdf3d>>,
@@ -126,7 +119,6 @@ pub fn upload_new_buffers<Material: MarcherMaterial>(
         )>,
     >,
     instances: Query<(&Handle<Sdf3d>, &Handle<Material>, &GlobalTransform)>,
-    mut current_bvh: ResMut<CurrentBvh>,
 ) {
     if sdfs.len() == 0 || mats.len() == 0 || instances.iter().len() == 0 {
         buffers.current = None;
@@ -301,7 +293,6 @@ pub fn upload_new_buffers<Material: MarcherMaterial>(
         instance_buffer.push(unordered_instances[i.t].clone());
     });
     instance_buffer.write_buffer(&*render_device, &*render_queue);
-    **current_bvh = bvh;
 
     let cur_ref = buffers.current.as_ref();
     buffers.new = Some(BufferSet {
