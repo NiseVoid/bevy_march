@@ -30,21 +30,15 @@ fn march(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
     let br = get_ray_dir(cluster_end * pixel_factor);
 
     var res: NearestSdf;
-    res.dist = 1e9;
+    res.dist = cone_march.limit;
     var cluster_size: f32;
-    var traveled = settings.near;
+    var traveled = cone_march.start;
     var step = 0.;
     var i = 0u;
     for (i = 0u; i < 256u; i++) {
         var pos = cone_march.origin + cone_march.direction * traveled;
 
-        var max_step = 1e9;
-        if res.next <= cluster_size + max_epsilon {
-            res = get_nearest(res.dist + step, pos, cone_march.ignored);
-        } else {
-            res.dist = to_instance(res.id, pos);
-            max_step = res.next;
-        }
+        res = get_nearest(res.dist + step, pos, cone_march.ignored);
 
         // TODO: this can probably be done more efficiently using the angle between corners
         let hit = traveled + res.dist;
@@ -61,12 +55,11 @@ fn march(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
             break;
         }
 
-        step = max(min(res.dist, max_step) - cluster_size, epsilon);
-        res.next -= step;
+        step = max(res.dist - cluster_size, epsilon);
         traveled += step;
     }
 
-    textureStore(cone_texture, position, vec4<f32>(settings.near / traveled, 0., 0., 0.));
+    textureStore(cone_texture, position, vec4<f32>(traveled, 0., 0., 0.));
 }
 
 fn len_sq(v: vec3<f32>) -> f32 {
