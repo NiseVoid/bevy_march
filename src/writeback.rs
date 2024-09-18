@@ -3,6 +3,7 @@ use bevy::{
     core_pipeline::{
         core_3d::graph::{Core3d, Node3d},
         fullscreen_vertex_shader::fullscreen_shader_vertex_state,
+        prepass::ViewPrepassTextures,
     },
     ecs::query::QueryItem,
     prelude::*,
@@ -17,11 +18,11 @@ use bevy::{
             CachedRenderPipelineId, ColorTargetState, ColorWrites, CompareFunction, DepthBiasState,
             DepthStencilState, FilterMode, FragmentState, MultisampleState, PipelineCache,
             PrimitiveState, RenderPassDescriptor, RenderPipelineDescriptor, Sampler,
-            SamplerBindingType, SamplerDescriptor, ShaderStages, StencilFaceState, StencilState,
-            StoreOp, TextureFormat, TextureSampleType,
+            SamplerBindingType, SamplerDescriptor, ShaderDefVal, ShaderStages, StencilFaceState,
+            StencilState, StoreOp, TextureFormat, TextureSampleType,
         },
         renderer::{RenderContext, RenderDevice},
-        texture::GpuImage,
+        texture::{DepthAttachment, GpuImage},
         view::{ViewDepthTexture, ViewTarget},
         Render, RenderApp, RenderSet,
     },
@@ -41,9 +42,14 @@ impl Plugin for WritebackPlugin {
                 prepare_bind_group.in_set(RenderSet::PrepareBindGroups),
             )
             .add_render_graph_node::<ViewNodeRunner<MarcherWriteback>>(Core3d, MarcherWriteback)
+            .add_render_graph_edges(Core3d, (MarcherMainPass, MarcherWriteback))
             .add_render_graph_edges(
                 Core3d,
-                (MarcherMainPass, MarcherWriteback, Node3d::StartMainPass),
+                (
+                    Node3d::MainOpaquePass,
+                    MarcherWriteback,
+                    Node3d::MainTransmissivePass,
+                ),
             );
     }
 
@@ -60,6 +66,7 @@ impl ViewNode for MarcherWriteback {
     type ViewQuery = (
         &'static ViewTarget,
         &'static ViewDepthTexture,
+        Option<&'static ViewPrepassTextures>,
         &'static WritebackBindGroup,
     );
 
@@ -67,20 +74,39 @@ impl ViewNode for MarcherWriteback {
         &self,
         _graph: &mut RenderGraphContext,
         render_context: &mut RenderContext,
-        (view_target, depth, bind_group): QueryItem<Self::ViewQuery>,
+        (view_target, depth, prepass, bind_group): QueryItem<Self::ViewQuery>,
         world: &World,
     ) -> Result<(), NodeRunError> {
         let writeback_pipeline = world.resource::<WritebackPipeline>();
 
         let pipeline_cache = world.resource::<PipelineCache>();
 
-        let Some(pipeline) = pipeline_cache.get_render_pipeline(writeback_pipeline.pipeline_id)
+        if let Some(prepass) = prepass.and_then(|p| p.depth_view()) {
+            let Some(pipeline) =
+                pipeline_cache.get_render_pipeline(writeback_pipeline.depth_pipeline_id)
+            else {
+                return Ok(());
+            };
+            let depth = DepthAttachment::new(prepass.clone(), None);
+            let mut render_pass = render_context.begin_tracked_render_pass(RenderPassDescriptor {
+                label: Some("marcher_depth_writeback"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(depth.get_attachment(StoreOp::Store)),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            render_pass.set_render_pipeline(pipeline);
+            render_pass.set_bind_group(0, &bind_group.0, &[]);
+            render_pass.draw(0..3, 0..1);
+        }
+
+        let Some(pipeline) =
+            pipeline_cache.get_render_pipeline(writeback_pipeline.main_pipeline_id)
         else {
             return Ok(());
         };
         let depth_stencil_attachment = Some(depth.get_attachment(StoreOp::Store));
-
-        // TODO: We can get the prepass textures from ViewPrepassTextures and use it to write to the depth prepass
 
         let mut render_pass = render_context.begin_tracked_render_pass(RenderPassDescriptor {
             label: Some("marcher_writeback"),
@@ -145,7 +171,8 @@ fn update_pipeline(mut commands: Commands, msaa: Res<Msaa>) {
 struct WritebackPipeline {
     layout: BindGroupLayout,
     sampler: Sampler,
-    pipeline_id: CachedRenderPipelineId,
+    main_pipeline_id: CachedRenderPipelineId,
+    depth_pipeline_id: CachedRenderPipelineId,
 }
 
 impl FromWorld for WritebackPipeline {
@@ -176,8 +203,28 @@ impl FromWorld for WritebackPipeline {
         });
 
         let shader = world.load_asset("embedded://bevy_march/writeback.wgsl");
-
-        let pipeline_id =
+        let stencil_state = DepthStencilState {
+            format: TextureFormat::Depth32Float,
+            depth_write_enabled: true,
+            depth_compare: CompareFunction::Greater,
+            stencil: StencilState {
+                front: StencilFaceState::IGNORE,
+                back: StencilFaceState::IGNORE,
+                read_mask: 0,
+                write_mask: 0,
+            },
+            bias: DepthBiasState {
+                constant: 0,
+                slope_scale: 0.,
+                clamp: 0.,
+            },
+        };
+        let multisample = MultisampleState {
+            count: msaa_count,
+            mask: !0,
+            alpha_to_coverage_enabled: false,
+        };
+        let main_pipeline_id =
             world
                 .resource_mut::<PipelineCache>()
                 .queue_render_pipeline(RenderPipelineDescriptor {
@@ -185,8 +232,8 @@ impl FromWorld for WritebackPipeline {
                     layout: vec![layout.clone()],
                     vertex: fullscreen_shader_vertex_state(),
                     fragment: Some(FragmentState {
-                        shader,
-                        shader_defs: vec![],
+                        shader: shader.clone(),
+                        shader_defs: vec![ShaderDefVal::Bool("COLOR".into(), true)],
                         entry_point: "fragment".into(),
                         targets: vec![Some(ColorTargetState {
                             // TODO: Use whatever the view has
@@ -196,34 +243,35 @@ impl FromWorld for WritebackPipeline {
                         })],
                     }),
                     primitive: PrimitiveState::default(),
-                    depth_stencil: Some(DepthStencilState {
-                        format: TextureFormat::Depth32Float,
-                        depth_write_enabled: true,
-                        depth_compare: CompareFunction::Greater,
-                        stencil: StencilState {
-                            front: StencilFaceState::IGNORE,
-                            back: StencilFaceState::IGNORE,
-                            read_mask: 0,
-                            write_mask: 0,
-                        },
-                        bias: DepthBiasState {
-                            constant: 0,
-                            slope_scale: 0.,
-                            clamp: 0.,
-                        },
+                    depth_stencil: Some(stencil_state.clone()),
+                    multisample,
+                    push_constant_ranges: vec![],
+                });
+
+        let depth_pipeline_id =
+            world
+                .resource_mut::<PipelineCache>()
+                .queue_render_pipeline(RenderPipelineDescriptor {
+                    label: Some("writeback_depth_pipeline".into()),
+                    layout: vec![layout.clone()],
+                    vertex: fullscreen_shader_vertex_state(),
+                    fragment: Some(FragmentState {
+                        shader,
+                        shader_defs: vec![],
+                        entry_point: "fragment".into(),
+                        targets: vec![],
                     }),
-                    multisample: MultisampleState {
-                        count: msaa_count,
-                        mask: !0,
-                        alpha_to_coverage_enabled: false,
-                    },
+                    primitive: PrimitiveState::default(),
+                    depth_stencil: Some(stencil_state),
+                    multisample,
                     push_constant_ranges: vec![],
                 });
 
         Self {
             layout,
             sampler,
-            pipeline_id,
+            main_pipeline_id,
+            depth_pipeline_id,
         }
     }
 }

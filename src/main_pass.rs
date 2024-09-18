@@ -45,10 +45,8 @@ impl Plugin for MainPassPlugin {
                 prepare_bind_group.in_set(RenderSet::PrepareBindGroups),
             )
             .add_render_graph_node::<ViewNodeRunner<MarcherMainPass>>(Core3d, MarcherMainPass)
-            .add_render_graph_edges(
-                Core3d,
-                (MarcherConePass, MarcherMainPass, Node3d::StartMainPass),
-            );
+            .add_render_graph_edges(Core3d, (MarcherConePass, MarcherMainPass))
+            .add_render_graph_edges(Core3d, (Node3d::EndPrepasses, MarcherMainPass));
     }
 
     fn finish(&self, app: &mut App) {
