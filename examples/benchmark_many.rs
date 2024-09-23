@@ -23,14 +23,6 @@ fn main() {
         FrameTimeDiagnosticsPlugin,
     ));
 
-    app.insert_gizmo_config(
-        DefaultGizmoConfigGroup,
-        GizmoConfig {
-            render_layers: RenderLayers::layer(1),
-            ..default()
-        },
-    );
-
     let main_pass_shader = app.world().resource::<AssetServer>().load("simple.wgsl");
 
     app.add_plugins(RayMarcherPlugin::<SdfMaterial>::new(main_pass_shader))

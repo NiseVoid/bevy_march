@@ -27,14 +27,6 @@ fn main() {
 
     let main_pass_shader = app.world().resource::<AssetServer>().load("benchmark.wgsl");
 
-    app.insert_gizmo_config(
-        DefaultGizmoConfigGroup,
-        GizmoConfig {
-            render_layers: RenderLayers::layer(1),
-            ..default()
-        },
-    );
-
     app.add_plugins(RayMarcherPlugin::<SdfMaterial>::new(main_pass_shader))
         .init_resource::<CursorState>()
         .add_systems(Startup, setup)
