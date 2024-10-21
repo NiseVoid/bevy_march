@@ -81,7 +81,7 @@ pub struct SdfIndices(Vec<u32>);
 #[derive(Resource, Deref, DerefMut, Default)]
 pub struct MaterialIndices(Vec<u32>);
 
-// TODO: This type becomes 80 bytes on the GPU, investigate performance of alternatives
+// TODO: investigate performance of better ways to pack this data with less wasted alignment space
 #[derive(ShaderType, Clone)]
 pub struct Instance {
     sdf_index: u32,
@@ -89,6 +89,8 @@ pub struct Instance {
     scale: f32,
     translation: Vec3,
     matrix: Mat3,
+    min: Vec3,
+    max: Vec3,
 }
 
 #[derive(ShaderType)]
@@ -259,6 +261,12 @@ fn upload_new_buffers<Material: MarcherMaterial>(
             let rotation = Quat::from_mat3a(&rot_matrix);
             let matrix = matrix_transpose * (inv_scale * inv_scale);
 
+            let aabb = sdf.aabb(default(), rotation);
+            let scaled_aabb = Aabb3d::new(
+                aabb.center() * scale + translation,
+                (aabb.half_size() * scale).min(Vec3A::splat(1e9)),
+            );
+
             let instance_index = unordered_instances.len();
             unordered_instances.push(Instance {
                 sdf_index,
@@ -266,13 +274,10 @@ fn upload_new_buffers<Material: MarcherMaterial>(
                 scale,
                 translation: translation.into(),
                 matrix: matrix.into(),
+                min: scaled_aabb.min.into(),
+                max: scaled_aabb.max.into(),
             });
 
-            let aabb = sdf.aabb(default(), rotation);
-            let scaled_aabb = Aabb3d::new(
-                aabb.center() * scale + translation,
-                (aabb.half_size() * scale).min(Vec3A::splat(1e9)),
-            );
             Some((instance_index, scaled_aabb))
         }),
     );
