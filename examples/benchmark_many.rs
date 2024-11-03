@@ -2,7 +2,7 @@ use bevy_march::*;
 use bevy_prototype_sdf::Sdf3d;
 
 use bevy::{
-    core_pipeline::bloom::BloomSettings,
+    core_pipeline::bloom::Bloom,
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
     math::vec3,
     prelude::*,
@@ -49,61 +49,46 @@ fn setup(
     mut mats: ResMut<Assets<SdfMaterial>>,
     device: Res<RenderDevice>,
 ) {
-    fn text_style(size: f32, gray: f32) -> TextStyle {
-        TextStyle {
-            font: default(),
-            font_size: size,
-            color: Color::srgb(gray, gray, gray),
-        }
-    }
     commands.spawn((
-        Text2dBundle {
-            text: Text {
-                sections: vec![
-                    TextSection::new("FPS: ", text_style(20., 0.7)),
-                    TextSection::new("?", text_style(20., 0.8)),
-                ],
-                ..default()
-            },
-            text_anchor: Anchor::TopLeft,
-            ..default()
-        },
-        FpsText,
-    ));
-    commands.spawn(Camera2dBundle {
-        camera: Camera {
+        Camera2d,
+        Camera {
             order: 1,
             hdr: true,
             clear_color: ClearColorConfig::None,
             ..default()
         },
-        ..default()
-    });
+    ));
+    commands.spawn((
+        Text2d::default(),
+        TextFont {
+            font_size: 18.0,
+            ..default()
+        },
+        Anchor::TopLeft,
+        FpsText,
+    ));
 
     // Camera
     commands.spawn((
-        Camera3dBundle {
-            transform: Transform::from_translation(vec3(0.0, 0.0, 5.0))
-                .looking_at(Vec3::X, Vec3::Y),
-            camera: Camera {
-                hdr: true,
-                ..default()
-            },
-            projection: Projection::Perspective(PerspectiveProjection {
-                far: 100.,
-                ..default()
-            }),
+        Camera3d::default(),
+        Camera {
+            hdr: true,
             ..default()
         },
+        Projection::Perspective(PerspectiveProjection {
+            far: 100.,
+            ..default()
+        }),
+        Transform::from_translation(vec3(0.0, 0.0, 5.0)).looking_at(Vec3::X, Vec3::Y),
         RenderLayers::from_layers(&[0, 1]),
         MarcherSettings::default(),
         MarcherMainTextures::new(&mut images, (8, 8)),
         MarcherConeTexture::new(&mut images, &device, (8, 8)),
         MarcherScale(1),
-        BloomSettings {
+        Bloom {
             intensity: 0.3,
             composite_mode: bevy::core_pipeline::bloom::BloomCompositeMode::Additive,
-            prefilter_settings: bevy::core_pipeline::bloom::BloomPrefilterSettings {
+            prefilter: bevy::core_pipeline::bloom::BloomPrefilter {
                 threshold: 1.,
                 threshold_softness: 0.0,
             },
@@ -113,16 +98,13 @@ fn setup(
 
     // Light
     commands.spawn((
-        DirectionalLightBundle {
-            directional_light: DirectionalLight {
-                color: Color::srgb(1., 1., 0.9),
-                illuminance: 5_000.,
-                shadows_enabled: false,
-                ..default()
-            },
-            transform: Transform::from_xyz(1., 1.5, 1.).looking_at(Vec3::ZERO, Vec3::Y),
+        DirectionalLight {
+            color: Color::srgb(1., 1., 0.9),
+            illuminance: 5_000.,
+            shadows_enabled: false,
             ..default()
         },
+        Transform::from_xyz(1., 1.5, 1.).looking_at(Vec3::ZERO, Vec3::Y),
         MarcherShadowSettings::default(),
         MarcherShadowTextures::new(&mut images),
     ));
@@ -140,11 +122,11 @@ fn setup(
         let scale = 0.2 + (i as f32 * 9829.72) % 1.8;
 
         commands.spawn((
-            TransformBundle::from_transform(
-                Transform::from_xyz(x, y, z).with_scale(Vec3::splat(scale)),
-            ),
-            cube.clone(),
-            cube_material.clone(),
+            Transform::from_xyz(x, y, z).with_scale(Vec3::splat(scale)),
+            RenderedSdf {
+                sdf: cube.clone(),
+                material: cube_material.clone(),
+            },
         ));
     }
 
@@ -161,27 +143,22 @@ fn setup(
         let scale = 0.5 + (i as f32 * 927.19) % 1.5;
 
         commands.spawn((
-            TransformBundle::from_transform(
-                Transform::from_xyz(x, y, z).with_scale(Vec3::splat(scale)),
-            ),
-            sphere.clone(),
-            sphere_material.clone(),
+            Transform::from_xyz(x, y, z).with_scale(Vec3::splat(scale)),
+            RenderedSdf {
+                sdf: sphere.clone(),
+                material: sphere_material.clone(),
+            },
         ));
     }
 }
 
 fn update_fps(
-    window: Query<&Window>,
-    mut text: Query<(&mut Transform, &mut Text), With<FpsText>>,
+    window: Single<&Window>,
+    mut text: Single<(&mut Transform, &mut Text2d), With<FpsText>>,
     diag_store: Res<DiagnosticsStore>,
 ) {
-    let half_size = window
-        .get_single()
-        .map(|w| w.resolution.size() * 0.5)
-        .unwrap_or_default();
-    let Ok((mut transform, mut text)) = text.get_single_mut() else {
-        return;
-    };
+    let half_size = window.resolution.size() * 0.5;
+    let (ref mut transform, ref mut text) = *text;
     let Some(fps) = diag_store.get(&FrameTimeDiagnosticsPlugin::FPS) else {
         return;
     };
@@ -189,5 +166,6 @@ fn update_fps(
         return;
     };
     transform.translation = Vec3::new(-half_size.x, half_size.y, 0.);
-    text.sections[1].value = format!("{:.1}", fps);
+    text.clear();
+    text.push_str(&format!("FPS: {:.1}", fps))
 }

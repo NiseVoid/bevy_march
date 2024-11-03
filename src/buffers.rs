@@ -1,4 +1,4 @@
-use crate::{MarcherMaterial, MarcherSettings};
+use crate::{MarcherMaterial, MarcherSettings, RenderedSdf};
 
 use std::{marker::PhantomData, num::NonZeroU64};
 
@@ -112,15 +112,8 @@ fn upload_new_buffers<Material: MarcherMaterial>(
     mut mat_indices: ResMut<MaterialIndices>,
     render_device: Res<RenderDevice>,
     render_queue: Res<RenderQueue>,
-    changed_query: Query<
-        (),
-        Or<(
-            Changed<Handle<Sdf3d>>,
-            Changed<Handle<Material>>,
-            Changed<GlobalTransform>,
-        )>,
-    >,
-    instances: Query<(&Handle<Sdf3d>, &Handle<Material>, &GlobalTransform)>,
+    changed_query: Query<(), Or<(Changed<RenderedSdf<Material>>, Changed<GlobalTransform>)>>,
+    instances: Query<(&RenderedSdf<Material>, &GlobalTransform)>,
 ) {
     if sdfs.len() == 0 || mats.len() == 0 || instances.iter().len() == 0 {
         buffers.current = None;
@@ -209,77 +202,79 @@ fn upload_new_buffers<Material: MarcherMaterial>(
     let mut unordered_instances = Vec::<Instance>::with_capacity(instances.iter().len());
     let bvh = BvhAabb3d::new(
         instances.iter().len(),
-        instances.iter().filter_map(|(sdf, mat, transform)| {
-            let AssetId::Index { index, .. } = sdf.id() else {
-                return None;
-            };
-            let index = (index.to_bits() & (u32::MAX as u64)) as usize;
-            let sdf_index = sdf_indices[index];
-            let sdf = sdfs.get(sdf.id()).unwrap();
+        instances
+            .iter()
+            .filter_map(|(RenderedSdf { sdf, material }, transform)| {
+                let AssetId::Index { index, .. } = sdf.id() else {
+                    return None;
+                };
+                let index = (index.to_bits() & (u32::MAX as u64)) as usize;
+                let sdf_index = sdf_indices[index];
+                let sdf = sdfs.get(sdf.id()).unwrap();
 
-            let AssetId::Index { index, .. } = mat.id() else {
-                return None;
-            };
-            let index = (index.to_bits() & (u32::MAX as u64)) as usize;
-            let mat_index = mat_indices[index];
+                let AssetId::Index { index, .. } = material.id() else {
+                    return None;
+                };
+                let index = (index.to_bits() & (u32::MAX as u64)) as usize;
+                let mat_index = mat_indices[index];
 
-            let matrix = transform.affine().matrix3;
-            let matrix_transpose = matrix.transpose();
-            let difference = matrix * matrix_transpose;
-            if difference.x_axis.yz().max_element() > 0.0001
-                || difference.y_axis.xz().max_element() > 0.0001
-                || difference.z_axis.xy().max_element() > 0.0001
-            {
-                warn!(
-                    "GlobalTransform can only contain translation, rotation and uniform scale.
+                let matrix = transform.affine().matrix3;
+                let matrix_transpose = matrix.transpose();
+                let difference = matrix * matrix_transpose;
+                if difference.x_axis.yz().max_element() > 0.0001
+                    || difference.y_axis.xz().max_element() > 0.0001
+                    || difference.z_axis.xy().max_element() > 0.0001
+                {
+                    warn!(
+                        "GlobalTransform can only contain translation, rotation and uniform scale.
                 Expected uniformly scaled matrix after canceling rotation but got {:?}",
-                    difference
+                        difference
+                    );
+                    return None;
+                }
+
+                let squared_scale = vec3(
+                    difference.x_axis.x,
+                    difference.y_axis.y,
+                    difference.z_axis.z,
                 );
-                return None;
-            }
+                if (squared_scale.x - squared_scale.y).abs() > 0.0001
+                    || (squared_scale.x - squared_scale.z).abs() > 0.0001
+                {
+                    warn!(
+                        "Non-uniform scaling is not supported, but found scale: {:?}",
+                        Vec3::from(squared_scale.to_array().map(|f| f.sqrt()))
+                    );
+                    return None;
+                }
 
-            let squared_scale = vec3(
-                difference.x_axis.x,
-                difference.y_axis.y,
-                difference.z_axis.z,
-            );
-            if (squared_scale.x - squared_scale.y).abs() > 0.0001
-                || (squared_scale.x - squared_scale.z).abs() > 0.0001
-            {
-                warn!(
-                    "Non-uniform scaling is not supported, but found scale: {:?}",
-                    Vec3::from(squared_scale.to_array().map(|f| f.sqrt()))
+                let scale = squared_scale.x.sqrt();
+                let inv_scale = scale.recip();
+
+                let translation = transform.translation_vec3a();
+                let rot_matrix = matrix * inv_scale;
+                let rotation = Quat::from_mat3a(&rot_matrix);
+                let matrix = matrix_transpose * (inv_scale * inv_scale);
+
+                let aabb = sdf.aabb(Isometry3d::from(rotation));
+                let scaled_aabb = Aabb3d::new(
+                    aabb.center() * scale + translation,
+                    (aabb.half_size() * scale).min(Vec3A::splat(1e9)),
                 );
-                return None;
-            }
 
-            let scale = squared_scale.x.sqrt();
-            let inv_scale = scale.recip();
+                let instance_index = unordered_instances.len();
+                unordered_instances.push(Instance {
+                    sdf_index,
+                    mat_index,
+                    scale,
+                    translation: translation.into(),
+                    matrix: matrix.into(),
+                    min: scaled_aabb.min.into(),
+                    max: scaled_aabb.max.into(),
+                });
 
-            let translation = transform.translation_vec3a();
-            let rot_matrix = matrix * inv_scale;
-            let rotation = Quat::from_mat3a(&rot_matrix);
-            let matrix = matrix_transpose * (inv_scale * inv_scale);
-
-            let aabb = sdf.aabb(default(), rotation);
-            let scaled_aabb = Aabb3d::new(
-                aabb.center() * scale + translation,
-                (aabb.half_size() * scale).min(Vec3A::splat(1e9)),
-            );
-
-            let instance_index = unordered_instances.len();
-            unordered_instances.push(Instance {
-                sdf_index,
-                mat_index,
-                scale,
-                translation: translation.into(),
-                matrix: matrix.into(),
-                min: scaled_aabb.min.into(),
-                max: scaled_aabb.max.into(),
-            });
-
-            Some((instance_index, scaled_aabb))
-        }),
+                Some((instance_index, scaled_aabb))
+            }),
     );
 
     let mut nodes = BufferVec::<BvhNode>::new(BufferUsages::STORAGE);

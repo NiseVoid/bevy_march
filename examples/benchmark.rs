@@ -2,13 +2,14 @@ use bevy_march::*;
 use bevy_prototype_sdf::Sdf3d;
 
 use bevy::{
-    core_pipeline::bloom::BloomSettings,
+    core_pipeline::bloom::Bloom,
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
     input::mouse::MouseMotion,
     math::vec3,
     prelude::*,
     render::{render_resource::ShaderType, renderer::RenderDevice, view::RenderLayers},
     sprite::Anchor,
+    text::TextBounds,
     window::CursorGrabMode,
 };
 
@@ -65,91 +66,82 @@ fn setup(
     mut mats: ResMut<Assets<SdfMaterial>>,
     device: Res<RenderDevice>,
 ) {
-    fn text_style(size: f32, gray: f32) -> TextStyle {
-        TextStyle {
-            font: default(),
-            font_size: size,
-            color: Color::srgb(gray, gray, gray),
-        }
-    }
     commands.spawn((
-        Text2dBundle {
-            text: Text {
-                sections: vec![
-                    TextSection::new("FPS: ", text_style(20., 0.7)),
-                    TextSection::new("?", text_style(20., 0.8)),
-                ],
-                ..default()
-            },
-            text_anchor: Anchor::TopLeft,
+        Text2d::default(),
+        TextFont {
+            font_size: 18.0,
             ..default()
         },
+        Anchor::TopLeft,
         FpsText,
     ));
+
+    let mut text = Text2d::default();
+    text.push_str(
+        "Use WASD to move.\n\
+        Space and Ctrl to go up and down.\n\
+        Left click and Escape to lock and release the cursor",
+    );
     commands.spawn((
-        Text2dBundle {
-            text: Text {
-                sections: vec![TextSection::new(
-                    "Use WASD to move.\n\
-                    Space and Ctrl to go up and down.\n\
-                    Left click and Escape to lock and release the cursor",
-                    text_style(40., 1.),
-                )],
-                justify: JustifyText::Center,
-                ..default()
-            },
+        text,
+        TextFont {
+            font_size: 60.0,
             ..default()
+        },
+        TextLayout {
+            justify: JustifyText::Center,
+            ..default()
+        },
+        Anchor::Center,
+        TextBounds {
+            width: Some(1200.),
+            height: None,
         },
         HelpText,
     ));
-    commands.spawn(Camera2dBundle {
-        camera: Camera {
+
+    commands.spawn((
+        Camera2d,
+        Camera {
             order: 1,
             hdr: true,
             clear_color: ClearColorConfig::None,
             ..default()
         },
-        ..default()
-    });
+    ));
 
     // Spawn some meshes to test interaction with raymarcher
     let mesh = meshes.add(Cuboid::new(2., 2., 0.01));
     let mat = std_mats.add(StandardMaterial::from(Color::srgb(1., 0.5, 0.5)));
 
     // Plane 1
-    commands.spawn(PbrBundle {
-        mesh: mesh.clone(),
-        material: mat.clone(),
-        transform: Transform::from_xyz(0.5, 0., -5.).with_scale(Vec3::splat(2.)),
-        ..default()
-    });
+    commands.spawn((
+        Mesh3d(mesh.clone()),
+        MeshMaterial3d(mat.clone()),
+        Transform::from_xyz(0.5, 0., -5.).with_scale(Vec3::splat(2.)),
+    ));
 
     // Plane 2
-    commands.spawn(PbrBundle {
-        mesh: mesh.clone(),
-        material: mat.clone(),
-        transform: Transform::from_xyz(4., 1.5, 0.),
-        ..default()
-    });
+    commands.spawn((
+        Mesh3d(mesh.clone()),
+        MeshMaterial3d(mat.clone()),
+        Transform::from_xyz(4., 1.5, 0.),
+    ));
 
     // Plane 3
-    commands.spawn(PbrBundle {
-        mesh: mesh.clone(),
-        material: mat.clone(),
-        transform: Transform::from_xyz(1.5, 1., -20.).with_scale(Vec3::splat(1.5)),
-        ..default()
-    });
+    commands.spawn((
+        Mesh3d(mesh.clone()),
+        MeshMaterial3d(mat.clone()),
+        Transform::from_xyz(1.5, 1., -20.).with_scale(Vec3::splat(1.5)),
+    ));
 
     let mesh = meshes.add(Sphere::default().mesh().ico(3).unwrap());
 
     // Sphere
     commands.spawn((
-        PbrBundle {
-            mesh,
-            material: mat.clone(),
-            transform: Transform::from_xyz(1.5, -1., 0.),
-            ..default()
-        },
+        Mesh3d(mesh),
+        MeshMaterial3d(mat.clone()),
+        Transform::from_xyz(1.5, -1., 0.),
         Offset {
             t: 0.,
             scale: 0.5,
@@ -160,37 +152,33 @@ fn setup(
     let mesh = meshes.add(Cuboid::default());
 
     // Cube
-    commands.spawn(PbrBundle {
-        mesh,
-        material: mat.clone(),
-        transform: Transform::from_xyz(5., -1., -5.),
-        ..default()
-    });
+    commands.spawn((
+        Mesh3d(mesh),
+        MeshMaterial3d(mat.clone()),
+        Transform::from_xyz(5., -1., -5.),
+    ));
 
     // Camera
     commands.spawn((
-        Camera3dBundle {
-            transform: Transform::from_translation(vec3(0.0, 0.0, 5.0))
-                .looking_at(Vec3::X, Vec3::Y),
-            camera: Camera {
-                hdr: true,
-                ..default()
-            },
-            projection: Projection::Perspective(PerspectiveProjection {
-                far: 100.,
-                ..default()
-            }),
+        Camera3d::default(),
+        Camera {
+            hdr: true,
             ..default()
         },
+        Projection::Perspective(PerspectiveProjection {
+            far: 100.,
+            ..default()
+        }),
+        Transform::from_translation(vec3(0.0, 0.0, 5.0)).looking_at(Vec3::X, Vec3::Y),
         RenderLayers::from_layers(&[0, 1]),
         MarcherSettings::default(),
         MarcherMainTextures::new(&mut images, (8, 8)),
         MarcherConeTexture::new(&mut images, &device, (8, 8)),
         MarcherScale(1),
-        BloomSettings {
+        Bloom {
             intensity: 0.5,
             composite_mode: bevy::core_pipeline::bloom::BloomCompositeMode::Additive,
-            prefilter_settings: bevy::core_pipeline::bloom::BloomPrefilterSettings {
+            prefilter: bevy::core_pipeline::bloom::BloomPrefilter {
                 threshold: 1.,
                 threshold_softness: 0.0,
             },
@@ -200,16 +188,13 @@ fn setup(
 
     // Light
     commands.spawn((
-        DirectionalLightBundle {
-            directional_light: DirectionalLight {
-                color: Color::srgb(1., 1., 0.9),
-                illuminance: 5_000.,
-                shadows_enabled: false,
-                ..default()
-            },
-            transform: Transform::from_xyz(1., 1.5, 1.).looking_at(Vec3::ZERO, Vec3::Y),
+        DirectionalLight {
+            color: Color::srgb(1., 1., 0.9),
+            illuminance: 5_000.,
+            shadows_enabled: false,
             ..default()
         },
+        Transform::from_xyz(1., 1.5, 1.).looking_at(Vec3::ZERO, Vec3::Y),
         MarcherShadowSettings::default(),
         MarcherShadowTextures::new(&mut images),
     ));
@@ -238,9 +223,11 @@ fn setup(
     });
 
     commands.spawn((
-        TransformBundle::from_transform(Transform::from_xyz(0., -0.5, -10.)),
-        cube,
-        cube_material,
+        Transform::from_xyz(0., -0.5, -10.),
+        RenderedSdf {
+            sdf: cube,
+            material: cube_material,
+        },
     ));
 
     let sphere = sdfs.add(Sdf3d::from(Sphere::default()));
@@ -257,11 +244,11 @@ fn setup(
         (vec3(-5., -1.5, -7.), 0.5, 0.4),
     ] {
         commands.spawn((
-            TransformBundle::from_transform(
-                Transform::from_translation(pos).with_scale(Vec3::splat(0.6)),
-            ),
-            sphere.clone(),
-            sphere_material.clone(),
+            Transform::from_translation(pos).with_scale(Vec3::splat(0.6)),
+            RenderedSdf {
+                sdf: sphere.clone(),
+                material: sphere_material.clone(),
+            },
             Offset {
                 t: 0.,
                 scale,
@@ -278,24 +265,21 @@ fn setup(
     });
 
     commands.spawn((
-        TransformBundle::from_transform(Transform::from_xyz(0., -2.25, 0.)),
-        water_plane,
-        water_material,
+        Transform::from_xyz(0., -2.25, 0.),
+        RenderedSdf {
+            sdf: water_plane,
+            material: water_material,
+        },
     ));
 }
 
 fn update_fps(
-    window: Query<&Window>,
-    mut text: Query<(&mut Transform, &mut Text), With<FpsText>>,
+    window: Single<&Window>,
+    mut text: Single<(&mut Transform, &mut Text2d), With<FpsText>>,
     diag_store: Res<DiagnosticsStore>,
 ) {
-    let half_size = window
-        .get_single()
-        .map(|w| w.resolution.size() * 0.5)
-        .unwrap_or_default();
-    let Ok((mut transform, mut text)) = text.get_single_mut() else {
-        return;
-    };
+    let half_size = window.resolution.size() * 0.5;
+    let (ref mut transform, ref mut text) = *text;
     let Some(fps) = diag_store.get(&FrameTimeDiagnosticsPlugin::FPS) else {
         return;
     };
@@ -303,7 +287,8 @@ fn update_fps(
         return;
     };
     transform.translation = Vec3::new(-half_size.x, half_size.y, 0.);
-    text.sections[1].value = format!("{:.1}", fps);
+    text.clear();
+    text.push_str(&format!("FPS: {:.1}", fps))
 }
 
 #[derive(Resource, Default, PartialEq, Eq)]
@@ -335,7 +320,7 @@ fn grab_cursor(
         return;
     };
 
-    (window.cursor.grab_mode, *cursor_state, *help_vis) = if grabbed {
+    (window.cursor_options.grab_mode, *cursor_state, *help_vis) = if grabbed {
         (
             CursorGrabMode::Confined,
             CursorState::Locked,
@@ -348,7 +333,7 @@ fn grab_cursor(
             Visibility::Inherited,
         )
     };
-    window.cursor.visible = !grabbed;
+    window.cursor_options.visible = !grabbed;
 }
 
 fn rotate_and_move(
@@ -375,7 +360,7 @@ fn rotate_and_move(
     }
 
     for mut transform in cameras.iter_mut() {
-        let translation = movement_input * time.delta_seconds() * 5.;
+        let translation = movement_input * time.delta_secs() * 5.;
         let translation = transform.rotation * translation;
         transform.translation += translation;
         transform.translation.y = transform.translation.y.max(-2.);
@@ -392,7 +377,7 @@ fn rotate_and_move(
 fn rotate_light(time: Res<Time>, mut lights: Query<&mut Transform, With<DirectionalLight>>) {
     for mut transform in lights.iter_mut() {
         let mut euler = transform.rotation.to_euler(EulerRot::YXZ);
-        euler.0 += 0.2 * time.delta_seconds();
+        euler.0 += 0.2 * time.delta_secs();
         transform.rotation = Quat::from_euler(EulerRot::YXZ, euler.0, euler.1, euler.2);
     }
 }
@@ -410,7 +395,7 @@ fn update_offsets(time: Res<Time>, mut spheres: Query<(&mut Transform, &mut Offs
         transform.translation.y -= offset.t.sin() * offset.speed;
 
         // Calculate and apply new offset
-        offset.t += offset.scale * time.delta_seconds();
+        offset.t += offset.scale * time.delta_secs();
         transform.translation.y += offset.t.sin() * offset.speed;
     }
 }

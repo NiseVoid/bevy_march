@@ -63,7 +63,7 @@ fn update_settings(
         let rotation = transform.affine().matrix3;
         settings.origin = transform.translation();
         settings.rotation = rotation.into();
-        settings.t = time.elapsed_seconds_wrapped();
+        settings.t = time.elapsed_secs_wrapped();
         settings.aspect_ratio = projection.aspect_ratio;
         settings.perspective_factor = 1. / (projection.fov / 2.).tan();
         settings.near = projection.near;

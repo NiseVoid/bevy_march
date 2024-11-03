@@ -36,7 +36,6 @@ impl Plugin for WritebackPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "writeback.wgsl");
         app.sub_app_mut(RenderApp)
-            .add_systems(Render, update_pipeline.in_set(RenderSet::PrepareAssets))
             .add_systems(
                 Render,
                 prepare_bind_group.in_set(RenderSet::PrepareBindGroups),
@@ -55,7 +54,7 @@ impl Plugin for WritebackPlugin {
 
     fn finish(&self, app: &mut App) {
         app.sub_app_mut(RenderApp)
-            .init_resource::<WritebackPipeline>();
+            .init_resource::<WritebackPipelines>();
     }
 }
 
@@ -68,16 +67,23 @@ impl ViewNode for MarcherWriteback {
         &'static ViewDepthTexture,
         Option<&'static ViewPrepassTextures>,
         &'static WritebackBindGroup,
+        Option<&'static Msaa>,
     );
 
     fn run(
         &self,
         _graph: &mut RenderGraphContext,
         render_context: &mut RenderContext,
-        (view_target, depth, prepass, bind_group): QueryItem<Self::ViewQuery>,
+        (view_target, depth, prepass, bind_group, msaa): QueryItem<Self::ViewQuery>,
         world: &World,
     ) -> Result<(), NodeRunError> {
-        let writeback_pipeline = world.resource::<WritebackPipeline>();
+        let pipelines = world.resource::<WritebackPipelines>();
+        let writeback_pipeline = &pipelines.pipelines[match msaa {
+            None | Some(Msaa::Off) => 0,
+            Some(Msaa::Sample2) => 1,
+            Some(Msaa::Sample4) => 2,
+            Some(Msaa::Sample8) => 3,
+        }];
 
         let pipeline_cache = world.resource::<PipelineCache>();
 
@@ -129,7 +135,7 @@ pub struct WritebackBindGroup(BindGroup);
 
 fn prepare_bind_group(
     mut commands: Commands,
-    pipeline: Res<WritebackPipeline>,
+    pipeline: Res<WritebackPipelines>,
     gpu_images: Res<RenderAssets<GpuImage>>,
     textures: Query<(Entity, &MarcherMainTextures)>,
     render_device: Res<RenderDevice>,
@@ -157,30 +163,20 @@ fn prepare_bind_group(
     }
 }
 
-fn update_pipeline(mut commands: Commands, msaa: Res<Msaa>) {
-    if !msaa.is_changed() {
-        return;
-    }
-
-    // TODO: We're probably leaking pipelines here?
-    commands.remove_resource::<WritebackPipeline>();
-    commands.init_resource::<WritebackPipeline>();
-}
-
 #[derive(Resource)]
-struct WritebackPipeline {
+struct WritebackPipelines {
     layout: BindGroupLayout,
     sampler: Sampler,
+    pipelines: [WritebackPipeline; 4],
+}
+
+struct WritebackPipeline {
     main_pipeline_id: CachedRenderPipelineId,
     depth_pipeline_id: CachedRenderPipelineId,
 }
 
-impl FromWorld for WritebackPipeline {
+impl FromWorld for WritebackPipelines {
     fn from_world(world: &mut World) -> Self {
-        let msaa_count = world
-            .get_resource::<Msaa>()
-            .map(|m| m.samples())
-            .unwrap_or(1);
         let render_device = world.resource::<RenderDevice>();
 
         // We need to define the bind group layout used for our pipeline
@@ -203,75 +199,94 @@ impl FromWorld for WritebackPipeline {
         });
 
         let shader = world.load_asset("embedded://bevy_march/writeback.wgsl");
-        let stencil_state = DepthStencilState {
-            format: TextureFormat::Depth32Float,
-            depth_write_enabled: true,
-            depth_compare: CompareFunction::Greater,
-            stencil: StencilState {
-                front: StencilFaceState::IGNORE,
-                back: StencilFaceState::IGNORE,
-                read_mask: 0,
-                write_mask: 0,
-            },
-            bias: DepthBiasState {
-                constant: 0,
-                slope_scale: 0.,
-                clamp: 0.,
-            },
-        };
-        let multisample = MultisampleState {
-            count: msaa_count,
-            mask: !0,
-            alpha_to_coverage_enabled: false,
-        };
-        let main_pipeline_id =
-            world
-                .resource_mut::<PipelineCache>()
-                .queue_render_pipeline(RenderPipelineDescriptor {
-                    label: Some("writeback_pipeline".into()),
-                    layout: vec![layout.clone()],
-                    vertex: fullscreen_shader_vertex_state(),
-                    fragment: Some(FragmentState {
-                        shader: shader.clone(),
-                        shader_defs: vec![ShaderDefVal::Bool("COLOR".into(), true)],
-                        entry_point: "fragment".into(),
-                        targets: vec![Some(ColorTargetState {
-                            // TODO: Use whatever the view has
-                            format: TextureFormat::Rgba16Float,
-                            blend: None,
-                            write_mask: ColorWrites::ALL,
-                        })],
-                    }),
-                    primitive: PrimitiveState::default(),
-                    depth_stencil: Some(stencil_state.clone()),
-                    multisample,
-                    push_constant_ranges: vec![],
-                });
 
-        let depth_pipeline_id =
-            world
-                .resource_mut::<PipelineCache>()
-                .queue_render_pipeline(RenderPipelineDescriptor {
-                    label: Some("writeback_depth_pipeline".into()),
-                    layout: vec![layout.clone()],
-                    vertex: fullscreen_shader_vertex_state(),
-                    fragment: Some(FragmentState {
-                        shader,
-                        shader_defs: vec![],
-                        entry_point: "fragment".into(),
-                        targets: vec![],
-                    }),
-                    primitive: PrimitiveState::default(),
-                    depth_stencil: Some(stencil_state),
-                    multisample,
-                    push_constant_ranges: vec![],
-                });
+        let pipelines = [
+            get_pipeline(world, layout.clone(), shader.clone(), Msaa::Off),
+            get_pipeline(world, layout.clone(), shader.clone(), Msaa::Sample2),
+            get_pipeline(world, layout.clone(), shader.clone(), Msaa::Sample4),
+            get_pipeline(world, layout.clone(), shader.clone(), Msaa::Sample8),
+        ];
 
         Self {
             layout,
             sampler,
-            main_pipeline_id,
-            depth_pipeline_id,
+            pipelines,
         }
+    }
+}
+
+fn get_pipeline(
+    world: &mut World,
+    layout: BindGroupLayout,
+    shader: Handle<Shader>,
+    msaa: Msaa,
+) -> WritebackPipeline {
+    let multisample = MultisampleState {
+        count: msaa.samples(),
+        mask: !0,
+        alpha_to_coverage_enabled: false,
+    };
+    let stencil_state = DepthStencilState {
+        format: TextureFormat::Depth32Float,
+        depth_write_enabled: true,
+        depth_compare: CompareFunction::Greater,
+        stencil: StencilState {
+            front: StencilFaceState::IGNORE,
+            back: StencilFaceState::IGNORE,
+            read_mask: 0,
+            write_mask: 0,
+        },
+        bias: DepthBiasState {
+            constant: 0,
+            slope_scale: 0.,
+            clamp: 0.,
+        },
+    };
+    let main_pipeline_id =
+        world
+            .resource_mut::<PipelineCache>()
+            .queue_render_pipeline(RenderPipelineDescriptor {
+                label: Some("writeback_pipeline".into()),
+                layout: vec![layout.clone()],
+                vertex: fullscreen_shader_vertex_state(),
+                fragment: Some(FragmentState {
+                    shader: shader.clone(),
+                    shader_defs: vec![ShaderDefVal::Bool("COLOR".into(), true)],
+                    entry_point: "fragment".into(),
+                    targets: vec![Some(ColorTargetState {
+                        // TODO: Use whatever the view has
+                        format: TextureFormat::Rgba16Float,
+                        blend: None,
+                        write_mask: ColorWrites::ALL,
+                    })],
+                }),
+                primitive: PrimitiveState::default(),
+                depth_stencil: Some(stencil_state.clone()),
+                multisample,
+                push_constant_ranges: vec![],
+            });
+
+    let depth_pipeline_id =
+        world
+            .resource_mut::<PipelineCache>()
+            .queue_render_pipeline(RenderPipelineDescriptor {
+                label: Some("writeback_depth_pipeline".into()),
+                layout: vec![layout],
+                vertex: fullscreen_shader_vertex_state(),
+                fragment: Some(FragmentState {
+                    shader,
+                    shader_defs: vec![],
+                    entry_point: "fragment".into(),
+                    targets: vec![],
+                }),
+                primitive: PrimitiveState::default(),
+                depth_stencil: Some(stencil_state),
+                multisample,
+                push_constant_ranges: vec![],
+            });
+
+    WritebackPipeline {
+        main_pipeline_id,
+        depth_pipeline_id,
     }
 }

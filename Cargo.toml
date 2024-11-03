@@ -21,16 +21,17 @@ codegen-units = 1
 strip = true
 
 [dependencies]
-bevy = {version = "0.14.0", default-features = false, features = [
+bevy = {version = "0.15.0-rc", default-features = false, features = [
   "bevy_color",
   "bevy_core_pipeline",
   "bevy_render",
+  "bevy_pbr", # Needed for DirectionalLight :(
 ]}
 bevy_prototype_sdf = { git = "https://github.com/NiseVoid/bevy_prototype_sdf", default-features=false, features = ["bevy_asset", "shader"]}
 ploc-bvh = "0.2"
 
 [dev-dependencies]
-bevy = {version = "0.14.0", default-features = false, features = [
+bevy = {version = "0.15.0-rc", default-features = false, features = [
   "multi_threaded",
   "wayland",
   "bevy_color",

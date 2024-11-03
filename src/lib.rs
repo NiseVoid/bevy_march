@@ -8,6 +8,7 @@ use bevy::{
         RenderApp,
     },
 };
+use bevy_prototype_sdf::Sdf3d;
 
 // TODO: We only need to re-render if any of the buffers change, the light changes, or the camera is moved
 // TODO: Document everything and warn(missing_docs)
@@ -34,15 +35,6 @@ mod writeback;
 use writeback::WritebackPlugin;
 
 pub trait MarcherMaterial: Asset + ShaderType + WriteInto + std::fmt::Debug + Clone {}
-
-#[derive(Component, Deref, DerefMut)]
-pub struct MarcherScale(pub u8);
-
-impl Default for MarcherScale {
-    fn default() -> Self {
-        Self(1)
-    }
-}
 
 pub struct RayMarcherPlugin<Material: MarcherMaterial> {
     shader: Handle<Shader>,
@@ -83,3 +75,21 @@ impl<Material: MarcherMaterial> Plugin for RayMarcherPlugin<Material> {
 
 const WORKGROUP_SIZE: u32 = 8;
 const CONE_SIZE: u32 = 8;
+
+/// An SDF instance to be rendered
+#[derive(Component)]
+pub struct RenderedSdf<Material: MarcherMaterial> {
+    /// The SDF handle
+    pub sdf: Handle<Sdf3d>,
+    /// The material handle
+    pub material: Handle<Material>,
+}
+
+#[derive(Component, Deref, DerefMut)]
+pub struct MarcherScale(pub u8);
+
+impl Default for MarcherScale {
+    fn default() -> Self {
+        Self(1)
+    }
+}
