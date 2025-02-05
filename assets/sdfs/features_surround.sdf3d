@@ -1,0 +1,13 @@
+Union(
+	Union(
+		Capsule(radius: 0.15, half_length: 0.3),
+		Rotate(
+			Capsule(radius: 0.15, half_length: 0.3),
+			(1.57, 0., 0.)
+		)
+	),
+	Rotate(
+		Capsule(radius: 0.15, half_length: 0.3),
+		(0., 0., 1.57)
+	)
+)

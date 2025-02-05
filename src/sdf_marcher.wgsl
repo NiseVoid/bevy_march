@@ -17,8 +17,8 @@ struct RayMarcherSettings {
 @group(1) @binding(0) var depth_texture: texture_storage_2d<r32float, write>;
 @group(1) @binding(1) var cone_texture: texture_storage_2d<r32float, read>;
 
-@group(2) @binding(2) var<storage, read> nodes: array<BvhNode>;
-@group(2) @binding(3) var<storage, read> instances: array<Instance>;
+@group(2) @binding(3) var<storage, read> nodes: array<BvhNode>;
+@group(2) @binding(4) var<storage, read> instances: array<Instance>;
 
 struct BvhNode {
     min: vec3<f32>,
@@ -28,7 +28,8 @@ struct BvhNode {
 }
 
 struct Instance {
-    shape_offset: u32,
+    order_start: u32,
+    data_start: u32,
     material: u32,
     scale: f32,
     translation: vec3<f32>,
@@ -78,6 +79,7 @@ struct MarchResult {
     distance: f32,
     material: u32,
     id: u32,
+    total_steps: u32,
 }
 
 fn march_ray(march: MarchSettings) -> MarchResult {
@@ -101,14 +103,14 @@ fn march_ray(march: MarchSettings) -> MarchResult {
     // The stack for the BVH
     var stack: array<u32, 16>;
     stack[0] = 0u;
-    var stackLocation = 1u;
+    var stack_location = 1u;
 
     while true {
-        if stackLocation == 0 {
+        if stack_location == 0 {
             break;
         }
-        stackLocation -= 1u;
-        let node = nodes[stack[stackLocation]];
+        stack_location -= 1u;
+        let node = nodes[stack[stack_location]];
 
         var hit = get_aabb_hit(node.min, node.max, march.origin, dir_recip, ray_positive);
         hit = vec2<f32>(max(hit.x, march.start), min(hit.y, result.traveled));
@@ -121,13 +123,13 @@ fn march_ray(march: MarchSettings) -> MarchResult {
             var hit_b = get_node_min(node.index+1, march.origin, dir_recip, ray_positive);
 
             if hit_a > hit_b {
-                stack[stackLocation] = node.index;
-                stack[stackLocation+1] = node.index+1;
-                stackLocation += 2u;
+                stack[stack_location] = node.index;
+                stack[stack_location+1] = node.index+1;
+                stack_location += 2u;
             } else {
-                stack[stackLocation] = node.index+1;
-                stack[stackLocation+1] = node.index;
-                stackLocation += 2u;
+                stack[stack_location] = node.index+1;
+                stack[stack_location+1] = node.index;
+                stack_location += 2u;
             }
 
             continue;
@@ -158,9 +160,10 @@ fn march_ray(march: MarchSettings) -> MarchResult {
             // TODO: Use epsilon that increases by distance
             let epsilon = min_epsilon / instance.scale;
 
-            for (var i = 0u; i < 64u; i++) {
+            for (var i = 0u; i < 128u; i++) {
+                result.total_steps += 1u;
                 let pos = relative_pos + relative_dir * local_traveled;
-                dist = sdf(pos, instance.shape_offset);
+                dist = sdf(pos, instance.order_start, instance.data_start);
 
                                     // TODO: Not local but based on distance to camera
                 // let epsilon = clamp(local_traveled * epsilon_per_dist, min_epsilon, max_epsilon);
@@ -285,14 +288,14 @@ fn get_nearest(limit: f32, pos: vec3<f32>, ignored: u32) -> NearestSdf {
 
     var stack: array<u32, 16>;
     stack[0] = 0u;
-    var stackLocation = 1u;
+    var stack_location = 1u;
 
     while true {
-        if stackLocation == 0 {
+        if stack_location == 0 {
             break;
         }
-        stackLocation -= 1u;
-        let node = nodes[stack[stackLocation]];
+        stack_location -= 1u;
+        let node = nodes[stack[stack_location]];
 
         let min = res.dist+0.001;
         let c = max(min(pos, node.max), node.min);
@@ -318,11 +321,11 @@ fn get_nearest(limit: f32, pos: vec3<f32>, ignored: u32) -> NearestSdf {
                 }
                 if ldist <= min_dist {
                     // If the further node isn't close enough, skip it
-                    stack[stackLocation] = node.index;
-                    stackLocation += 1u;
+                    stack[stack_location] = node.index;
+                    stack_location += 1u;
                 }
-                stack[stackLocation] = node.index+1;
-                stackLocation += 1u;
+                stack[stack_location] = node.index+1;
+                stack_location += 1u;
             } else {
                 if ldist > min_dist {
                     // If the nearest node isn't close enough, skip both
@@ -330,11 +333,11 @@ fn get_nearest(limit: f32, pos: vec3<f32>, ignored: u32) -> NearestSdf {
                 }
                 if rdist <= min_dist {
                     // If the further node isn't close enough, skip it
-                    stack[stackLocation] = node.index+1;
-                    stackLocation += 1u;
+                    stack[stack_location] = node.index+1;
+                    stack_location += 1u;
                 }
-                stack[stackLocation] = node.index;
-                stackLocation += 1u;
+                stack[stack_location] = node.index;
+                stack_location += 1u;
             }
 
             continue;
@@ -347,7 +350,7 @@ fn get_nearest(limit: f32, pos: vec3<f32>, ignored: u32) -> NearestSdf {
             }
             let instance = instances[instance_id];
             let relative_pos = instance.matrix * (pos - instance.translation);
-            let dist = sdf(relative_pos, instance.shape_offset) * instance.scale;
+            let dist = sdf(relative_pos, instance.order_start, instance.data_start) * instance.scale;
 
             res = sdf_min(res, dist, instance.material, instance_id);
         }
@@ -359,7 +362,7 @@ fn get_nearest(limit: f32, pos: vec3<f32>, ignored: u32) -> NearestSdf {
 fn to_instance(instance_id: u32, pos: vec3<f32>) -> f32 {
     let instance = instances[instance_id];
     let relative_pos = instance.matrix * (pos - instance.translation);
-    return sdf(relative_pos, instance.shape_offset) * instance.scale;
+    return sdf(relative_pos, instance.order_start, instance.data_start) * instance.scale;
 }
 
 fn len_sq(v: vec3<f32>) -> f32 {

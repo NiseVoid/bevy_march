@@ -26,12 +26,10 @@ impl MarcherMaterial for SdfMaterial {}
 
 fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>, device: Res<RenderDevice>) {
     commands.spawn((
-        Camera3dBundle {
-            camera: Camera {
-                // TODO: We should not need HDR for a minimal setup
-                hdr: true,
-                ..default()
-            },
+        Camera3d::default(),
+        Camera {
+            // TODO: We should not need HDR for a minimal setup
+            hdr: true,
             ..default()
         },
         MarcherSettings::default(),
@@ -40,10 +38,8 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>, device: Res<
     ));
 
     commands.spawn((
-        DirectionalLightBundle {
-            transform: Transform::from_xyz(1., 1.5, 1.).looking_at(Vec3::ZERO, Vec3::Y),
-            ..default()
-        },
+        Transform::from_xyz(1., 1.5, 1.).looking_at(Vec3::ZERO, Vec3::Y),
+        DirectionalLight::default(),
         MarcherShadowSettings::default(),
         MarcherShadowTextures::new(&mut images),
     ));

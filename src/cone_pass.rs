@@ -281,6 +281,7 @@ impl FromWorld for RayMarcherPipeline {
                 shader: shader.clone(),
                 shader_defs: vec![],
                 entry_point: Cow::from("march"),
+                zero_initialize_workgroup_memory: false,
             });
 
         Self {

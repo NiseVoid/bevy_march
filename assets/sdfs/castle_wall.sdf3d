@@ -1,0 +1,19 @@
+Subtract(
+	Translate(
+		Cuboid(9., 2.5, 0.5),
+		(0., 1.25, 0.)
+	),
+	Rotate(
+		Extrude(
+			Union(
+				Rectangle(1.5, 1.3),
+				Translate(
+					Circle(1.5),
+					(0., 1.3)
+				)
+			),
+			0.6
+		),
+		(1.57, 0., 0.)
+	)
+)

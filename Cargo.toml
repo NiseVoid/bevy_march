@@ -21,14 +21,15 @@ codegen-units = 1
 strip = true
 
 [dependencies]
-bevy = {version = "0.15.0-rc", default-features = false, features = [
+bevy = {version = "0.15.0", default-features = false, features = [
   "bevy_color",
   "bevy_core_pipeline",
   "bevy_render",
+  "bevy_window",
   "bevy_pbr", # Needed for DirectionalLight :(
 ]}
 bevy_prototype_sdf = { git = "https://github.com/NiseVoid/bevy_prototype_sdf", default-features=false, features = ["bevy_asset", "shader"]}
-ploc-bvh = "0.2"
+ploc-bvh = "0.3"
 
 [dev-dependencies]
 bevy = {version = "0.15.0-rc", default-features = false, features = [
@@ -48,6 +49,3 @@ bevy = {version = "0.15.0-rc", default-features = false, features = [
   "ktx2",
   "zstd",
 ]}
-
-[patch.crates-io]
-ploc-bvh = { git = "https://github.com/NiseVoid/ploc-bvh" }

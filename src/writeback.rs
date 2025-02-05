@@ -264,6 +264,7 @@ fn get_pipeline(
                 depth_stencil: Some(stencil_state.clone()),
                 multisample,
                 push_constant_ranges: vec![],
+                zero_initialize_workgroup_memory: false,
             });
 
     let depth_pipeline_id =
@@ -283,6 +284,7 @@ fn get_pipeline(
                 depth_stencil: Some(stencil_state),
                 multisample,
                 push_constant_ranges: vec![],
+                zero_initialize_workgroup_memory: false,
             });
 
     WritebackPipeline {

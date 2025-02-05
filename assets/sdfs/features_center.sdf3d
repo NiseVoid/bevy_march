@@ -1,0 +1,7 @@
+Intersect(
+	Shell(
+		Sphere(0.975),
+		0.025
+	),
+	Cuboid(0.7, 0.7, 0.7),
+)

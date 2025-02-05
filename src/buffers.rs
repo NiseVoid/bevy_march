@@ -3,20 +3,19 @@ use crate::{MarcherMaterial, MarcherSettings, RenderedSdf};
 use std::{marker::PhantomData, num::NonZeroU64};
 
 use bevy::{
-    asset::AssetEvents,
     math::{vec3, Vec3A},
     prelude::*,
     render::{
         render_resource::{
             binding_types::{storage_buffer_read_only, storage_buffer_read_only_sized},
             BindGroup, BindGroupEntries, BindGroupLayout, BindGroupLayoutEntries, Buffer,
-            BufferInitDescriptor, BufferUsages, BufferVec, ShaderStages, ShaderType,
+            BufferUsages, BufferVec, ShaderStages, ShaderType,
         },
         renderer::{RenderDevice, RenderQueue},
         Extract, Render, RenderApp, RenderSet,
     },
 };
-use bevy_prototype_sdf::{Sdf3d, SdfBounding};
+use bevy_prototype_sdf::{dim3::Dim3, ExecutableSdfs, Sdf3d, SdfBounding, SdfProcessing};
 use ploc_bvh::dim3::{Aabb3d, BoundingVolume, BvhAabb3d};
 
 pub struct BufferPlugin<Material: MarcherMaterial> {
@@ -33,7 +32,7 @@ impl<Material: MarcherMaterial> Default for BufferPlugin<Material> {
 
 impl<Material: MarcherMaterial> Plugin for BufferPlugin<Material> {
     fn build(&self, app: &mut App) {
-        app.add_systems(Last, upload_new_buffers::<Material>.after(AssetEvents))
+        app.add_systems(Last, upload_new_buffers::<Material>.after(SdfProcessing))
             .init_resource::<SdfIndices>()
             .init_resource::<MaterialIndices>();
 
@@ -69,14 +68,15 @@ struct CurrentBufferSet(Option<BufferSet>);
 
 #[derive(Clone, Debug)]
 pub struct BufferSet {
-    pub sdfs: Buffer,
+    pub order: Buffer,
+    pub data: Buffer,
     pub materials: Buffer,
     pub nodes: Buffer,
     pub instances: Buffer,
 }
 
 #[derive(Resource, Deref, DerefMut, Default)]
-pub struct SdfIndices(Vec<u32>);
+pub struct SdfIndices(Vec<(u32, u32)>);
 
 #[derive(Resource, Deref, DerefMut, Default)]
 pub struct MaterialIndices(Vec<u32>);
@@ -84,7 +84,8 @@ pub struct MaterialIndices(Vec<u32>);
 // TODO: investigate performance of better ways to pack this data with less wasted alignment space
 #[derive(ShaderType, Clone)]
 pub struct Instance {
-    sdf_index: u32,
+    order_index: u32,
+    data_index: u32,
     mat_index: u32,
     scale: f32,
     translation: Vec3,
@@ -105,7 +106,7 @@ pub struct BvhNode {
 fn upload_new_buffers<Material: MarcherMaterial>(
     mut buffers: ResMut<Buffers>,
     mut sdf_events: EventReader<AssetEvent<Sdf3d>>,
-    sdfs: Res<Assets<Sdf3d>>,
+    sdfs: ExecutableSdfs<Dim3>,
     mut sdf_indices: ResMut<SdfIndices>,
     mut mat_events: EventReader<AssetEvent<Material>>,
     mats: Res<Assets<Material>>,
@@ -115,7 +116,7 @@ fn upload_new_buffers<Material: MarcherMaterial>(
     changed_query: Query<(), Or<(Changed<RenderedSdf<Material>>, Changed<GlobalTransform>)>>,
     instances: Query<(&RenderedSdf<Material>, &GlobalTransform)>,
 ) {
-    if sdfs.len() == 0 || mats.len() == 0 || instances.iter().len() == 0 {
+    if sdfs.is_empty() || mats.is_empty() || instances.iter().len() == 0 {
         buffers.current = None;
         buffers.new = None;
         return;
@@ -125,51 +126,41 @@ fn upload_new_buffers<Material: MarcherMaterial>(
         buffers.current = Some(previous_new);
     }
 
-    let mut new_buffers = (None, None);
+    let mut new_buffers = (None, None, None);
 
     if buffers.current.is_none() || sdf_events.read().last().is_some() {
         sdf_indices.clear();
-        let mut sdf_buffer: Vec<u8> = Vec::with_capacity(
-            buffers
-                .current
-                .as_ref()
-                .map(|b| b.sdfs.size() as usize)
-                .unwrap_or(0),
-        );
-        for (id, sdf) in sdfs.iter() {
-            let AssetId::Index { index, .. } = id else {
-                warn_once!("Only dense asset storage is supported for sdfs");
-                continue;
-            };
-            let index = (index.to_bits() & (u32::MAX as u64)) as usize;
-            let start_offset = (sdf_buffer.len() / 4) as u32;
+        let mut order_buffer = BufferVec::<u32>::new(BufferUsages::STORAGE);
+        let mut data_buffer = BufferVec::<f32>::new(BufferUsages::STORAGE);
+        for (index, order, data) in sdfs.iter() {
+            let order_start = order_buffer.len() as u32;
+            let data_start = data_buffer.len() as u32;
 
-            if !sdf.operations.is_empty() {
-                warn!("SDF operations are not supported");
-                continue;
+            order_buffer.push(order.len() as u32);
+            for node in order.iter() {
+                order_buffer.push(node.exec());
+                order_buffer.push(node.value());
             }
-
-            // TODO: Change SDF trees to be stored in a better format that can be
-            //       sent to the GPU directly
-            sdf.to_buffer(&mut sdf_buffer);
+            for &v in data {
+                data_buffer.push(v);
+            }
 
             while index >= sdf_indices.len() {
-                sdf_indices.push(0);
+                sdf_indices.push((0, 0));
             }
-            sdf_indices[index] = start_offset;
+            sdf_indices[index] = (order_start, data_start);
         }
 
-        if sdf_buffer.len() < 4 {
-            sdf_buffer.extend([0; 4]);
+        if order_buffer.is_empty() {
+            order_buffer.push(0);
+            data_buffer.push(0.);
         }
 
-        new_buffers.0 = Some(
-            render_device.create_buffer_with_data(&BufferInitDescriptor {
-                usage: BufferUsages::STORAGE,
-                label: Some("SDF buffer"),
-                contents: &sdf_buffer,
-            }),
-        );
+        order_buffer.write_buffer(&*render_device, &*render_queue);
+        new_buffers.0 = order_buffer.buffer().cloned();
+
+        data_buffer.write_buffer(&*render_device, &*render_queue);
+        new_buffers.1 = data_buffer.buffer().cloned();
     }
 
     if buffers.current.is_none() || mat_events.read().last().is_some() {
@@ -192,10 +183,10 @@ fn upload_new_buffers<Material: MarcherMaterial>(
         }
 
         mats_buffer.write_buffer(&*render_device, &*render_queue);
-        new_buffers.1 = mats_buffer.buffer().cloned();
+        new_buffers.2 = mats_buffer.buffer().cloned();
     }
 
-    if new_buffers.0.is_none() && new_buffers.1.is_none() && changed_query.is_empty() {
+    if new_buffers.0.is_none() && new_buffers.2.is_none() && changed_query.is_empty() {
         return;
     }
 
@@ -205,12 +196,10 @@ fn upload_new_buffers<Material: MarcherMaterial>(
         instances
             .iter()
             .filter_map(|(RenderedSdf { sdf, material }, transform)| {
-                let AssetId::Index { index, .. } = sdf.id() else {
+                let Some((index, order, data)) = sdfs.get(sdf.id()) else {
                     return None;
                 };
-                let index = (index.to_bits() & (u32::MAX as u64)) as usize;
                 let sdf_index = sdf_indices[index];
-                let sdf = sdfs.get(sdf.id()).unwrap();
 
                 let AssetId::Index { index, .. } = material.id() else {
                     return None;
@@ -256,7 +245,7 @@ fn upload_new_buffers<Material: MarcherMaterial>(
                 let rotation = Quat::from_mat3a(&rot_matrix);
                 let matrix = matrix_transpose * (inv_scale * inv_scale);
 
-                let aabb = sdf.aabb(Isometry3d::from(rotation));
+                let aabb = (order, data).aabb(Isometry3d::from(rotation));
                 let scaled_aabb = Aabb3d::new(
                     aabb.center() * scale + translation,
                     (aabb.half_size() * scale).min(Vec3A::splat(1e9)),
@@ -264,7 +253,8 @@ fn upload_new_buffers<Material: MarcherMaterial>(
 
                 let instance_index = unordered_instances.len();
                 unordered_instances.push(Instance {
-                    sdf_index,
+                    order_index: sdf_index.0,
+                    data_index: sdf_index.1,
                     mat_index,
                     scale,
                     translation: translation.into(),
@@ -296,12 +286,16 @@ fn upload_new_buffers<Material: MarcherMaterial>(
 
     let cur_ref = buffers.current.as_ref();
     buffers.new = Some(BufferSet {
-        sdfs: new_buffers
+        order: new_buffers
             .0
-            .or_else(|| cur_ref.map(|c| c.sdfs.clone()))
+            .or_else(|| cur_ref.map(|c| c.order.clone()))
+            .unwrap(),
+        data: new_buffers
+            .1
+            .or_else(|| cur_ref.map(|c| c.data.clone()))
             .unwrap(),
         materials: new_buffers
-            .1
+            .2
             .or_else(|| cur_ref.map(|c| c.materials.clone()))
             .unwrap(),
         nodes: nodes.buffer().unwrap().clone(),
@@ -312,7 +306,8 @@ fn upload_new_buffers<Material: MarcherMaterial>(
 fn extract_buffers(buffers: Extract<Res<Buffers>>, mut extracted: ResMut<CurrentBufferSet>) {
     if buffers.current.is_none() && buffers.new.is_none() {
         if let Some(previous) = &**extracted {
-            previous.sdfs.destroy();
+            previous.order.destroy();
+            previous.data.destroy();
             previous.materials.destroy();
             previous.instances.destroy();
         }
@@ -324,8 +319,11 @@ fn extract_buffers(buffers: Extract<Res<Buffers>>, mut extracted: ResMut<Current
     };
 
     if let Some(previous) = &**extracted {
-        if new_buffers.sdfs.id() != previous.sdfs.id() {
-            previous.sdfs.destroy();
+        if new_buffers.order.id() != previous.order.id() {
+            previous.order.destroy();
+        }
+        if new_buffers.data.id() != previous.data.id() {
+            previous.data.destroy();
         }
         if new_buffers.materials.id() != previous.materials.id() {
             previous.materials.destroy();
@@ -351,8 +349,10 @@ impl FromWorld for BufferLayout {
             &BindGroupLayoutEntries::sequential(
                 ShaderStages::COMPUTE,
                 (
-                    // SDFs
+                    // SDF execution order
                     storage_buffer_read_only::<u32>(false),
+                    // SDF data
+                    storage_buffer_read_only::<f32>(false),
                     // Materials
                     storage_buffer_read_only_sized(false, Some(mat_size)),
                     // Nodes
@@ -384,7 +384,8 @@ fn prepare_bind_group(
             None,
             &buffer_layout,
             &BindGroupEntries::sequential((
-                buffer_set.sdfs.as_entire_binding(),
+                buffer_set.order.as_entire_binding(),
+                buffer_set.data.as_entire_binding(),
                 buffer_set.materials.as_entire_binding(),
                 buffer_set.nodes.as_entire_binding(),
                 buffer_set.instances.as_entire_binding(),

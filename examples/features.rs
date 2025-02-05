@@ -1,5 +1,4 @@
 use bevy_march::*;
-use bevy_prototype_sdf::Sdf3d;
 
 use bevy::{
     core_pipeline::bloom::Bloom,
@@ -13,6 +12,10 @@ use bevy::{
     window::CursorGrabMode,
 };
 
+fn make_single_threaded(schedule: &mut Schedule) {
+    schedule.set_executor_kind(bevy::ecs::schedule::ExecutorKind::SingleThreaded);
+}
+
 fn main() {
     let mut app = App::new();
     app.add_plugins((
@@ -24,9 +27,12 @@ fn main() {
             ..default()
         }),
         FrameTimeDiagnosticsPlugin,
-    ));
+    ))
+    .edit_schedule(PreUpdate, make_single_threaded)
+    .edit_schedule(Update, make_single_threaded)
+    .edit_schedule(PostUpdate, make_single_threaded);
 
-    let main_pass_shader = app.world().resource::<AssetServer>().load("benchmark.wgsl");
+    let main_pass_shader = app.world().resource::<AssetServer>().load("features.wgsl");
 
     app.add_plugins(RayMarcherPlugin::<SdfMaterial>::new(main_pass_shader))
         .init_resource::<CursorState>()
@@ -62,8 +68,8 @@ fn setup(
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut std_mats: ResMut<Assets<StandardMaterial>>,
-    mut sdfs: ResMut<Assets<Sdf3d>>,
     mut mats: ResMut<Assets<SdfMaterial>>,
+    loader: Res<AssetServer>,
     device: Res<RenderDevice>,
 ) {
     commands.spawn((
@@ -215,8 +221,8 @@ fn setup(
     // moon3.dist = op_extrude(pos.y + 2.1, moon3_2d, 0.3) - 0.03;
     // moon3.mat = 1u;
 
-    let cube = sdfs.add(Sdf3d::from(Cuboid::default()));
-    let cube_material = mats.add(SdfMaterial {
+    let center_shape = loader.load("sdfs/features_center.sdf3d");
+    let center_material = mats.add(SdfMaterial {
         base_color: LinearRgba::BLACK.to_vec3(),
         emissive: LinearRgba::rgb(0., 1.5, 1.75).to_vec3(),
         reflective: 0.,
@@ -225,13 +231,13 @@ fn setup(
     commands.spawn((
         Transform::from_xyz(0., -0.5, -10.),
         RenderedSdf {
-            sdf: cube,
-            material: cube_material,
+            sdf: center_shape,
+            material: center_material,
         },
     ));
 
-    let sphere = sdfs.add(Sdf3d::from(Sphere::default()));
-    let sphere_material = mats.add(SdfMaterial {
+    let surround_shape = loader.load("sdfs/features_surround.sdf3d");
+    let surround_material = mats.add(SdfMaterial {
         base_color: LinearRgba::gray(0.7).to_vec3(),
         emissive: LinearRgba::BLACK.to_vec3(),
         reflective: 0.,
@@ -246,8 +252,8 @@ fn setup(
         commands.spawn((
             Transform::from_translation(pos).with_scale(Vec3::splat(0.6)),
             RenderedSdf {
-                sdf: sphere.clone(),
-                material: sphere_material.clone(),
+                sdf: surround_shape.clone(),
+                material: surround_material.clone(),
             },
             Offset {
                 t: 0.,
@@ -257,7 +263,7 @@ fn setup(
         ));
     }
 
-    let water_plane = sdfs.add(Sdf3d::from(InfinitePlane3d::default()));
+    let floor_shape = loader.load("sdfs/features_floor.sdf3d");
     let water_material = mats.add(SdfMaterial {
         base_color: LinearRgba::rgb(0.5, 1., 0.5).to_vec3(),
         emissive: LinearRgba::BLACK.to_vec3(),
@@ -267,7 +273,7 @@ fn setup(
     commands.spawn((
         Transform::from_xyz(0., -2.25, 0.),
         RenderedSdf {
-            sdf: water_plane,
+            sdf: floor_shape,
             material: water_material,
         },
     ));
