@@ -209,6 +209,11 @@ fn get_aabb_hit(aabb_min: vec3<f32>, aabb_max: vec3<f32>, origin: vec3<f32>, dir
     return vec2<f32>(max3(tmin), min3(tmax));
 }
 
+fn get_aabb_dist_sq(aabb_min: vec3<f32>, aabb_max: vec3<f32>, pos: vec3<f32>) -> f32 {
+    let c = max(min(pos, aabb_max), aabb_min);
+    return len_sq(c - pos);
+}
+
 fn max3(in: vec3<f32>) -> f32 {
     return max(max(in.x, in.y), in.z);
 }
@@ -229,19 +234,65 @@ fn get_individual_ray(position: vec2<u32>) -> MarchSettings {
     return get_initial_settings(uv, start);
 }
 
-const step_dist = 0.035;
-const steps = 10;
+const STEP_DIST = 0.04;
+const STEP_COUNT = 8u;
 
-// TODO: Optimize this to iterate over the BVH first, using sphere intersections using the radius at the last step
 fn get_occlusion(point: vec3<f32>, normal: vec3<f32>) -> f32 {
-    var occlusion = 1.;
-    for (var i = 1; i <= steps; i++) {
-        let step = f32(i);
-        let from_point = step * step_dist;
-        let pos = point + normal * from_point;
-        let dist = single_dist(pos, 999999999u, from_point + 0.02);
+    let max_radius = f32(STEP_COUNT) * STEP_DIST;
+    let center = point + normal * max_radius;
+    let max_radius_sq = max_radius * max_radius;
 
-        occlusion -= saturate(from_point - dist) / step;
+    var steps: array<f32, STEP_COUNT>;
+
+    // The stack for the BVH
+    var stack: array<u32, 16>;
+    stack[0] = 0u;
+    var stack_location = 1u;
+
+    while true {
+        if stack_location == 0 {
+            break;
+        }
+        stack_location -= 1u;
+        let node = nodes[stack[stack_location]];
+
+        var dist_sq = get_aabb_dist_sq(node.min, node.max, center);
+        if dist_sq > max_radius_sq {
+            continue;
+        }
+
+        if node.count == 0 {
+            stack[stack_location] = node.index;
+            stack[stack_location+1] = node.index+1;
+            stack_location += 2u;
+            continue;
+        }
+
+        for (var i = 0u; i < node.count; i++) {
+            let instance_id = node.index + i;
+            let instance = instances[instance_id];
+
+            var dist_sq = get_aabb_dist_sq(instance.min, instance.max, center);
+            if dist_sq > max_radius_sq {
+                continue;
+            }
+
+            let relative_pos = instance.matrix * (point - instance.translation);
+            let relative_dir = instance.matrix * normal;
+
+            for (var step = 0u; step < STEP_COUNT; step++) {
+                let from_point = f32(step + 1) * STEP_DIST;
+                let pos = relative_pos + relative_dir * from_point;
+                let dist = sdf(pos, instance.order_start, instance.data_start);
+
+                steps[i] = max(steps[i], from_point - dist);
+            }
+        }
+    }
+
+    var occlusion = 1.;
+    for (var step = 0u; step < STEP_COUNT; step++) {
+        occlusion -= saturate(steps[step]) / f32(step + 1);
     }
 
     return saturate(occlusion);
