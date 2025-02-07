@@ -39,14 +39,22 @@ struct Instance {
 }
 
 fn get_forward_ray(screen_uv: vec2<f32>) -> vec3<f32> {
-    var march_uv = 1. - screen_uv * 2.;
-    march_uv.x *= -settings.aspect_ratio;
+    var march_uv = screen_uv * 2. - 1.; // Convert from 0 - 1 to -1 - 1
 
-    return normalize(vec3<f32>(march_uv, -settings.perspective_factor));
+    // Scale X according to the aspect ratio, flip Y because world space and screen space Y are reversed
+    march_uv *= vec2<f32>(settings.aspect_ratio, -1.);
+
+    return normalize(vec3<f32>(march_uv, -settings.perspective_factor)); // -Z is forward
 }
 
 fn get_ray_dir(screen_uv: vec2<f32>) -> vec3<f32> {
     return settings.rotation * get_forward_ray(screen_uv);
+}
+
+fn get_ray_dir_invz(screen_uv: vec2<f32>) -> vec4<f32> {
+    let dir = get_forward_ray(screen_uv);
+    let inv_z = 1. / -dir.z;
+    return vec4<f32>(settings.rotation * dir, inv_z);
 }
 
 fn get_initial_settings(screen_uv: vec2<f32>, start: f32) -> MarchSettings {
@@ -88,12 +96,7 @@ fn march_ray(march: MarchSettings) -> MarchResult {
     let max_epsilon = march.scale * 0.02;
 
     let dir_recip = 1. / march.direction;
-    let ray_sign = sign(march.direction);
-    let ray_positive = vec3<bool>(
-        ray_sign.x == 1.,
-        ray_sign.y == 1.,
-        ray_sign.z == 1.,
-    );
+    let ray_positive = sign(march.direction) == vec3<f32>(1.);
 
     // Output variables
     var result: MarchResult;
@@ -119,8 +122,8 @@ fn march_ray(march: MarchSettings) -> MarchResult {
         }
 
         if node.count == 0 {
-            var hit_a = get_node_min(node.index, march.origin, dir_recip, ray_positive);
-            var hit_b = get_node_min(node.index+1, march.origin, dir_recip, ray_positive);
+            let hit_a = get_node_min(node.index, march.origin, dir_recip, ray_positive);
+            let hit_b = get_node_min(node.index+1, march.origin, dir_recip, ray_positive);
 
             if hit_a > hit_b {
                 stack[stack_location] = node.index;
@@ -148,24 +151,24 @@ fn march_ray(march: MarchSettings) -> MarchResult {
             if hit.x > hit.y {
                 continue;
             }
-            let end = hit.y - hit.x;
+            let end = (hit.y - hit.x) / instance.scale;
 
             let start_pos = march.origin + march.direction * hit.x;
 
             let relative_pos = instance.matrix * (start_pos - instance.translation);
-            let relative_dir = instance.matrix * march.direction;
+            let relative_dir = instance.matrix * march.direction * instance.scale;
 
             var dist = 0.;
             var local_traveled = 0.;
             // TODO: Use epsilon that increases by distance
             let epsilon = min_epsilon / instance.scale;
 
-            for (var i = 0u; i < 128u; i++) {
+            for (var i = 0u; i < 64u; i++) {
                 result.total_steps += 1u;
                 let pos = relative_pos + relative_dir * local_traveled;
                 dist = sdf(pos, instance.order_start, instance.data_start);
 
-                                    // TODO: Not local but based on distance to camera
+                // TODO: Not local but based on distance to camera
                 // let epsilon = clamp(local_traveled * epsilon_per_dist, min_epsilon, max_epsilon);
                 if local_traveled > end || dist < epsilon {
                     break;
