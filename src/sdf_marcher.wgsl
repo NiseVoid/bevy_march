@@ -90,10 +90,14 @@ struct MarchResult {
     total_steps: u32,
 }
 
+const EPSILON_PER_DIST = 0.001;
+const EPSILON_MIN = 0.002;
+const EPSILON_MAX = 0.02;
+
 fn march_ray(march: MarchSettings) -> MarchResult {
-    let epsilon_per_dist = march.scale * 0.001;
-    let min_epsilon = march.scale * 0.002;
-    let max_epsilon = march.scale * 0.02;
+    let epsilon_per_dist = march.scale * EPSILON_PER_DIST;
+    let min_epsilon = march.scale * EPSILON_MIN;
+    let max_epsilon = march.scale * EPSILON_MAX;
 
     let dir_recip = 1. / march.direction;
     let ray_positive = sign(march.direction) == vec3<f32>(1.);
@@ -115,7 +119,7 @@ fn march_ray(march: MarchSettings) -> MarchResult {
         stack_location -= 1u;
         let node = nodes[stack[stack_location]];
 
-        var hit = get_aabb_hit(node.min, node.max, march.origin, dir_recip, ray_positive);
+        var hit = get_aabb_hit(node.min-max_epsilon, node.max+max_epsilon, march.origin, dir_recip, ray_positive);
         hit = vec2<f32>(max(hit.x, march.start), min(hit.y, result.traveled));
         if hit.x > hit.y || hit.y <= march.start {
             continue;
@@ -146,8 +150,8 @@ fn march_ray(march: MarchSettings) -> MarchResult {
 
             let instance = instances[instance_id];
 
-            var hit = get_aabb_hit(instance.min, instance.max, march.origin, dir_recip, ray_positive);
-            hit = vec2<f32>(max(hit.x - max_epsilon, march.start), min(hit.y, result.traveled));
+            var hit = get_aabb_hit(instance.min-max_epsilon, instance.max+max_epsilon, march.origin, dir_recip, ray_positive);
+            hit = vec2<f32>(max(hit.x, march.start), min(hit.y, result.traveled));
             if hit.x > hit.y {
                 continue;
             }
@@ -160,16 +164,17 @@ fn march_ray(march: MarchSettings) -> MarchResult {
 
             var dist = 0.;
             var local_traveled = 0.;
-            // TODO: Use epsilon that increases by distance
-            let epsilon = min_epsilon / instance.scale;
+
+            let start_epsilon = clamp(epsilon_per_dist * hit.x, min_epsilon, max_epsilon) / instance.scale;
+            var epsilon = start_epsilon;
+            let max_epsilon = max_epsilon / instance.scale;
 
             for (var i = 0u; i < 64u; i++) {
                 result.total_steps += 1u;
                 let pos = relative_pos + relative_dir * local_traveled;
                 dist = sdf(pos, instance.order_start, instance.data_start);
 
-                // TODO: Not local but based on distance to camera
-                // let epsilon = clamp(local_traveled * epsilon_per_dist, min_epsilon, max_epsilon);
+                epsilon = min(start_epsilon + local_traveled * epsilon_per_dist, max_epsilon);
                 if local_traveled > end || dist < epsilon {
                     break;
                 }

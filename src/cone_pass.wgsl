@@ -1,4 +1,4 @@
-#import bevy_march::{get_initial_settings, settings, NearestSdf, get_ray_dir_invz, nodes, get_node_min, instances, get_aabb_hit};
+#import bevy_march::{get_initial_settings, settings, NearestSdf, get_ray_dir_invz, nodes, get_node_min, instances, get_aabb_hit, EPSILON_PER_DIST, EPSILON_MIN, EPSILON_MAX};
 #import bevy_prototype_sdf::sdf;
 
 @group(1) @binding(0) var cone_texture: texture_storage_2d<r32float, write>;
@@ -34,6 +34,10 @@ fn march(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
 
     let frustum = get_cone_frustum(tl, tr, bl, br, march.direction);
 
+    let epsilon_per_dist = march.scale * EPSILON_PER_DIST;
+    let min_epsilon = march.scale * EPSILON_MIN;
+    let max_epsilon = march.scale * EPSILON_MAX;
+
     let dir_recip = 1. / march.direction;
     let ray_positive = sign(march.direction) == vec3<f32>(1.);
 
@@ -51,15 +55,15 @@ fn march(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
         stack_location -= 1u;
         let node = nodes[stack[stack_location]];
 
-        if !check_aabb_frustum(frustum, node.min, node.max) {
+        if !check_aabb_frustum(frustum, node.min-max_epsilon, node.max+max_epsilon) {
             continue;
         }
 
         if node.count == 0 {
             let a = nodes[node.index];
-            let hit_a = project_node(a.min, a.max, march.origin, march.direction, ray_positive);
+            let hit_a = project_node(a.min-max_epsilon, a.max+max_epsilon, march.origin, march.direction, ray_positive);
             let b = nodes[node.index+1];
-            let hit_b = project_node(b.min, b.max, march.origin, march.direction, ray_positive);
+            let hit_b = project_node(b.min-max_epsilon, b.max+max_epsilon, march.origin, march.direction, ray_positive);
 
             if hit_a.x > hit_b.x {
                 stack[stack_location] = node.index;
@@ -78,11 +82,13 @@ fn march(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
             let instance_id = node.index + i;
             let instance = instances[instance_id];
 
-            if !check_aabb_frustum(frustum, instance.min, instance.max) {
+            let min = instance.min - max_epsilon;
+            let max = instance.max + max_epsilon;
+            if !check_aabb_frustum(frustum, min, max) {
                 continue;
             }
 
-            var hit = project_node(instance.min, instance.max, march.origin, march.direction, ray_positive);
+            var hit = project_node(min, max, march.origin, march.direction, ray_positive);
             hit = vec2<f32>(max(hit.x, march.start), min(hit.y, traveled));
             if hit.x > hit.y {
                 continue;
@@ -98,7 +104,11 @@ fn march(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
 
             var dist = 0.;
             var local_traveled = 0.;
-            let epsilon = 0.02 * march.scale / instance.scale;
+
+            let start_epsilon = clamp(epsilon_per_dist * hit.x, min_epsilon, max_epsilon) / instance.scale;
+            var epsilon = start_epsilon;
+            let max_epsilon = max_epsilon / instance.scale;
+
             let start_radius = start * radius_per_unit / instance.scale;
             let radius_per_scaled_unit = radius_per_unit * instance.scale;
 
@@ -106,6 +116,7 @@ fn march(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
                 let pos = relative_pos + relative_dir * local_traveled;
                 dist = sdf(pos, instance.order_start, instance.data_start);
 
+                epsilon = min(start_epsilon + local_traveled * epsilon_per_dist, max_epsilon);
                 cluster_size = start_radius + radius_per_scaled_unit * local_traveled;
 
                 if local_traveled > end || dist < cluster_size + epsilon {
