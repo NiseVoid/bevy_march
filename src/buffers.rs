@@ -3,7 +3,10 @@ use crate::{MarcherMaterial, MarcherSettings, RenderedSdf};
 use std::{marker::PhantomData, num::NonZeroU64};
 
 use bevy::{
-    math::{vec3, Vec3A},
+    math::{
+        bounding::{Aabb3d, BoundingVolume},
+        vec3, Vec3A,
+    },
     prelude::*,
     render::{
         render_resource::{
@@ -16,7 +19,7 @@ use bevy::{
     },
 };
 use bevy_prototype_sdf::{dim3::Dim3, ExecutableSdfs, Sdf3d, SdfBounding, SdfProcessing};
-use ploc_bvh::dim3::{Aabb3d, BoundingVolume, BvhAabb3d};
+use obvhs::{bvh2::builder::build_bvh2, BvhBuildParams};
 
 pub struct BufferPlugin<Material: MarcherMaterial> {
     _phantom: PhantomData<Material>,
@@ -90,8 +93,6 @@ pub struct Instance {
     scale: f32,
     translation: Vec3,
     matrix: Mat3,
-    min: Vec3,
-    max: Vec3,
 }
 
 #[derive(ShaderType)]
@@ -191,96 +192,104 @@ fn upload_new_buffers<Material: MarcherMaterial>(
     }
 
     let mut unordered_instances = Vec::<Instance>::with_capacity(instances.iter().len());
-    let bvh = BvhAabb3d::new(
-        instances.iter().len(),
-        instances
-            .iter()
-            .filter_map(|(RenderedSdf { sdf, material }, transform)| {
-                let Some((index, order, data)) = sdfs.get(sdf.id()) else {
-                    return None;
-                };
-                let sdf_index = sdf_indices[index];
 
-                let AssetId::Index { index, .. } = material.id() else {
-                    return None;
-                };
-                let index = (index.to_bits() & (u32::MAX as u64)) as usize;
-                let mat_index = mat_indices[index];
+    let instances = instances
+        .iter()
+        .filter_map(|(RenderedSdf { sdf, material }, transform)| {
+            let Some((index, order, data)) = sdfs.get(sdf.id()) else {
+                return None;
+            };
+            let sdf_index = sdf_indices[index];
 
-                let matrix = transform.affine().matrix3;
-                let matrix_transpose = matrix.transpose();
-                let difference = matrix * matrix_transpose;
-                if difference.x_axis.yz().max_element() > 0.0001
-                    || difference.y_axis.xz().max_element() > 0.0001
-                    || difference.z_axis.xy().max_element() > 0.0001
-                {
-                    warn!(
-                        "GlobalTransform can only contain translation, rotation and uniform scale.
+            let AssetId::Index { index, .. } = material.id() else {
+                return None;
+            };
+            let index = (index.to_bits() & (u32::MAX as u64)) as usize;
+            let mat_index = mat_indices[index];
+
+            let matrix = transform.affine().matrix3;
+            let matrix_transpose = matrix.transpose();
+            let difference = matrix * matrix_transpose;
+            if difference.x_axis.yz().max_element() > 0.0001
+                || difference.y_axis.xz().max_element() > 0.0001
+                || difference.z_axis.xy().max_element() > 0.0001
+            {
+                warn!(
+                    "GlobalTransform can only contain translation, rotation and uniform scale.
                 Expected uniformly scaled matrix after canceling rotation but got {:?}",
-                        difference
-                    );
-                    return None;
-                }
-
-                let squared_scale = vec3(
-                    difference.x_axis.x,
-                    difference.y_axis.y,
-                    difference.z_axis.z,
+                    difference
                 );
-                if (squared_scale.x - squared_scale.y).abs() > 0.0001
-                    || (squared_scale.x - squared_scale.z).abs() > 0.0001
-                {
-                    warn!(
-                        "Non-uniform scaling is not supported, but found scale: {:?}",
-                        Vec3::from(squared_scale.to_array().map(|f| f.sqrt()))
-                    );
-                    return None;
-                }
+                return None;
+            }
 
-                let scale = squared_scale.x.sqrt();
-                let inv_scale = scale.recip();
-
-                let translation = transform.translation_vec3a();
-                let rot_matrix = matrix * inv_scale;
-                let rotation = Quat::from_mat3a(&rot_matrix);
-                let matrix = matrix_transpose * (inv_scale * inv_scale);
-
-                let aabb = (order, data).aabb(Isometry3d::from(rotation));
-                let scaled_aabb = Aabb3d::new(
-                    aabb.center() * scale + translation,
-                    (aabb.half_size() * scale).min(Vec3A::splat(1e9)),
+            let squared_scale = vec3(
+                difference.x_axis.x,
+                difference.y_axis.y,
+                difference.z_axis.z,
+            );
+            if (squared_scale.x - squared_scale.y).abs() > 0.0001
+                || (squared_scale.x - squared_scale.z).abs() > 0.0001
+            {
+                warn!(
+                    "Non-uniform scaling is not supported, but found scale: {:?}",
+                    Vec3::from(squared_scale.to_array().map(|f| f.sqrt()))
                 );
+                return None;
+            }
 
-                let instance_index = unordered_instances.len();
-                unordered_instances.push(Instance {
-                    order_index: sdf_index.0,
-                    data_index: sdf_index.1,
-                    mat_index,
-                    scale,
-                    translation: translation.into(),
-                    matrix: matrix.into(),
-                    min: scaled_aabb.min.into(),
-                    max: scaled_aabb.max.into(),
-                });
+            let scale = squared_scale.x.sqrt();
+            let inv_scale = scale.recip();
 
-                Some((instance_index, scaled_aabb))
-            }),
+            let translation = transform.translation_vec3a();
+            let rot_matrix = matrix * inv_scale;
+            let rotation = Quat::from_mat3a(&rot_matrix);
+            let matrix = matrix_transpose * (inv_scale * inv_scale);
+
+            let aabb = (order, data).aabb(Isometry3d::from(rotation));
+            let scaled_aabb = Aabb3d::new(
+                aabb.center() * scale + translation,
+                (aabb.half_size() * scale).min(Vec3A::splat(1e9)),
+            );
+
+            unordered_instances.push(Instance {
+                order_index: sdf_index.0,
+                data_index: sdf_index.1,
+                mat_index,
+                scale,
+                translation: translation.into(),
+                matrix: matrix.into(),
+            });
+
+            Some(obvhs::aabb::Aabb {
+                min: scaled_aabb.min,
+                max: scaled_aabb.max,
+            })
+        })
+        .collect::<Box<[obvhs::aabb::Aabb]>>();
+
+    let bvh = build_bvh2(
+        &instances,
+        BvhBuildParams {
+            max_prims_per_leaf: 1,
+            ..BvhBuildParams::very_slow_build()
+        },
+        &mut std::time::Duration::default(),
     );
 
     let mut nodes = BufferVec::<BvhNode>::new(BufferUsages::STORAGE);
-    bvh.nodes().for_each(|n| {
+    bvh.nodes.iter().for_each(|n| {
         nodes.push(BvhNode {
-            min: n.volume.min.into(),
-            max: n.volume.max.into(),
-            count: n.count,
-            index: n.start_index,
+            min: n.aabb.min.into(),
+            max: n.aabb.max.into(),
+            count: n.prim_count,
+            index: n.first_index,
         });
     });
     nodes.write_buffer(&*render_device, &*render_queue);
 
     let mut instance_buffer = BufferVec::<Instance>::new(BufferUsages::STORAGE);
-    bvh.items().for_each(|i| {
-        instance_buffer.push(unordered_instances[i.t].clone());
+    bvh.primitive_indices.iter().for_each(|i| {
+        instance_buffer.push(unordered_instances[*i as usize].clone());
     });
     instance_buffer.write_buffer(&*render_device, &*render_queue);
 

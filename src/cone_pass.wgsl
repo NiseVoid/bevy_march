@@ -78,58 +78,54 @@ fn march(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
             continue;
         }
 
-        for (var i = 0u; i < node.count; i++) {
-            let instance_id = node.index + i;
-            let instance = instances[instance_id];
+        // If the node is a leaf it should have one node to traverse
 
-            let min = instance.min - max_epsilon;
-            let max = instance.max + max_epsilon;
-            if !check_aabb_frustum(frustum, min, max) {
-                continue;
+        let instance_id = node.index;
+        let instance = instances[instance_id];
+
+        let min = node.min - max_epsilon;
+        let max = node.max + max_epsilon;
+        var hit = project_node(min, max, march.origin, march.direction, ray_positive);
+        hit = vec2<f32>(max(hit.x, march.start), min(hit.y, traveled));
+        if hit.x > hit.y {
+            continue;
+        }
+
+        let start = max(hit.x, 0.);
+        let end = (min(hit.y, march.limit) - start) / instance.scale;
+
+        let start_pos = march.origin + march.direction * start;
+
+        let relative_pos = instance.matrix * (start_pos - instance.translation);
+        let relative_dir = instance.matrix * march.direction * instance.scale;
+
+        var dist = 0.;
+        var local_traveled = 0.;
+
+        let start_epsilon = clamp(epsilon_per_dist * hit.x, min_epsilon, max_epsilon) / instance.scale;
+        var epsilon = start_epsilon;
+        let max_epsilon = max_epsilon / instance.scale;
+
+        let start_radius = start * radius_per_unit / instance.scale;
+        let radius_per_scaled_unit = radius_per_unit * instance.scale;
+
+        for (var i = 0u; i < 512u; i++) {
+            let pos = relative_pos + relative_dir * local_traveled;
+            dist = sdf(pos, instance.order_start, instance.data_start);
+
+            epsilon = min(start_epsilon + local_traveled * epsilon_per_dist, max_epsilon);
+            cluster_size = start_radius + radius_per_scaled_unit * local_traveled;
+
+            if local_traveled > end || dist < cluster_size + epsilon {
+                break;
             }
 
-            var hit = project_node(min, max, march.origin, march.direction, ray_positive);
-            hit = vec2<f32>(max(hit.x, march.start), min(hit.y, traveled));
-            if hit.x > hit.y {
-                continue;
-            }
+            local_traveled += max(dist - cluster_size, epsilon);
+        }
 
-            let start = max(hit.x, 0.);
-            let end = (min(hit.y, march.limit) - start) / instance.scale;
-
-            let start_pos = march.origin + march.direction * start;
-
-            let relative_pos = instance.matrix * (start_pos - instance.translation);
-            let relative_dir = instance.matrix * march.direction * instance.scale;
-
-            var dist = 0.;
-            var local_traveled = 0.;
-
-            let start_epsilon = clamp(epsilon_per_dist * hit.x, min_epsilon, max_epsilon) / instance.scale;
-            var epsilon = start_epsilon;
-            let max_epsilon = max_epsilon / instance.scale;
-
-            let start_radius = start * radius_per_unit / instance.scale;
-            let radius_per_scaled_unit = radius_per_unit * instance.scale;
-
-            for (var i = 0u; i < 512u; i++) {
-                let pos = relative_pos + relative_dir * local_traveled;
-                dist = sdf(pos, instance.order_start, instance.data_start);
-
-                epsilon = min(start_epsilon + local_traveled * epsilon_per_dist, max_epsilon);
-                cluster_size = start_radius + radius_per_scaled_unit * local_traveled;
-
-                if local_traveled > end || dist < cluster_size + epsilon {
-                    break;
-                }
-
-                local_traveled += max(dist - cluster_size, epsilon);
-            }
-
-            let cur_travel = start + local_traveled * instance.scale;
-            if dist < cluster_size + epsilon && cur_travel < traveled {
-                traveled = cur_travel;
-            }
+        let cur_travel = start + local_traveled * instance.scale;
+        if dist < cluster_size + epsilon && cur_travel < traveled {
+            traveled = cur_travel;
         }
     }
 

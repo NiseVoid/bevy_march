@@ -34,8 +34,6 @@ struct Instance {
     scale: f32,
     translation: vec3<f32>,
     matrix: mat3x3<f32>, // Inverse rotation + inverse scale
-    min: vec3<f32>,
-    max: vec3<f32>,
 }
 
 fn get_forward_ray(screen_uv: vec2<f32>) -> vec3<f32> {
@@ -142,57 +140,50 @@ fn march_ray(march: MarchSettings) -> MarchResult {
             continue;
         }
 
-        for (var i = 0u; i < node.count; i++) {
-            let instance_id = node.index + i;
-            if instance_id == march.ignored {
-                continue;
+        let instance_id = node.index;
+        if instance_id == march.ignored {
+            continue;
+        }
+
+        let instance = instances[instance_id];
+
+        let end = (hit.y - hit.x) / instance.scale;
+
+        let start_pos = march.origin + march.direction * hit.x;
+
+        let relative_pos = instance.matrix * (start_pos - instance.translation);
+        let relative_dir = instance.matrix * march.direction * instance.scale;
+
+        var dist = 0.;
+        var local_traveled = 0.;
+
+        let start_epsilon = clamp(epsilon_per_dist * hit.x, min_epsilon, max_epsilon) / instance.scale;
+        var epsilon = start_epsilon;
+        let max_epsilon = max_epsilon / instance.scale;
+
+        for (var i = 0u; i < 64u; i++) {
+            result.total_steps += 1u;
+            let pos = relative_pos + relative_dir * local_traveled;
+            dist = sdf(pos, instance.order_start, instance.data_start);
+
+            epsilon = min(start_epsilon + local_traveled * epsilon_per_dist, max_epsilon);
+            if local_traveled > end || dist < epsilon {
+                break;
             }
 
-            let instance = instances[instance_id];
+            local_traveled += max(dist, epsilon);
+        }
 
-            var hit = get_aabb_hit(instance.min-max_epsilon, instance.max+max_epsilon, march.origin, dir_recip, ray_positive);
-            hit = vec2<f32>(max(hit.x, march.start), min(hit.y, result.traveled));
-            if hit.x > hit.y {
-                continue;
-            }
-            let end = (hit.y - hit.x) / instance.scale;
+        if dist < epsilon {
+            dist *= instance.scale;
 
-            let start_pos = march.origin + march.direction * hit.x;
+            let traveled = hit.x + local_traveled * instance.scale;
 
-            let relative_pos = instance.matrix * (start_pos - instance.translation);
-            let relative_dir = instance.matrix * march.direction * instance.scale;
-
-            var dist = 0.;
-            var local_traveled = 0.;
-
-            let start_epsilon = clamp(epsilon_per_dist * hit.x, min_epsilon, max_epsilon) / instance.scale;
-            var epsilon = start_epsilon;
-            let max_epsilon = max_epsilon / instance.scale;
-
-            for (var i = 0u; i < 64u; i++) {
-                result.total_steps += 1u;
-                let pos = relative_pos + relative_dir * local_traveled;
-                dist = sdf(pos, instance.order_start, instance.data_start);
-
-                epsilon = min(start_epsilon + local_traveled * epsilon_per_dist, max_epsilon);
-                if local_traveled > end || dist < epsilon {
-                    break;
-                }
-
-                local_traveled += max(dist, epsilon);
-            }
-
-            if dist < epsilon {
-                dist *= instance.scale;
-
-                let traveled = hit.x + local_traveled * instance.scale;
-
-                if traveled < result.traveled {
-                    result.distance = dist;
-                    result.id = instance_id;
-                    result.material = instance.material;
-                    result.traveled = traveled;
-                }
+            if traveled < result.traveled {
+                result.distance = dist;
+                result.id = instance_id;
+                result.material = instance.material;
+                result.traveled = traveled;
             }
         }
     }
@@ -276,25 +267,22 @@ fn get_occlusion(point: vec3<f32>, normal: vec3<f32>) -> f32 {
             continue;
         }
 
-        for (var i = 0u; i < node.count; i++) {
-            let instance_id = node.index + i;
-            let instance = instances[instance_id];
+        let instance = instances[node.index];
 
-            var dist_sq = get_aabb_dist_sq(instance.min, instance.max, center);
-            if dist_sq > max_radius_sq {
-                continue;
-            }
+        dist_sq = get_aabb_dist_sq(node.min, node.max, center);
+        if dist_sq > max_radius_sq {
+            continue;
+        }
 
-            let relative_pos = instance.matrix * (point - instance.translation);
-            let relative_dir = instance.matrix * normal;
+        let relative_pos = instance.matrix * (point - instance.translation);
+        let relative_dir = instance.matrix * normal;
 
-            for (var step = 0u; step < STEP_COUNT; step++) {
-                let from_point = f32(step + 1) * STEP_DIST;
-                let pos = relative_pos + relative_dir * from_point;
-                let dist = sdf(pos, instance.order_start, instance.data_start);
+        for (var step = 0u; step < STEP_COUNT; step++) {
+            let from_point = f32(step + 1) * STEP_DIST;
+            let pos = relative_pos + relative_dir * from_point;
+            let dist = sdf(pos, instance.order_start, instance.data_start);
 
-                steps[i] = max(steps[i], from_point - dist);
-            }
+            steps[step] = max(steps[step], from_point - dist);
         }
     }
 
