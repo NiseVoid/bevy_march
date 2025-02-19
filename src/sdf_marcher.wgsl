@@ -304,10 +304,6 @@ fn calc_normal(id: u32, p: vec3<f32>) -> vec3<f32> {
     ));
 }
 
-fn single_dist(pos: vec3<f32>, ignore: u32, max_dist: f32) -> f32 {
-    return get_nearest(max_dist, pos, ignore).dist;
-}
-
 struct NearestSdf {
     dist: f32,
     mat: u32,
@@ -327,84 +323,6 @@ fn sdf_min(prev: NearestSdf, next_dist: f32, next_mat: u32, next_id: u32) -> Nea
 }
 
 const PLACEHOLDER_ID: u32 = 999999999u;
-
-fn get_nearest(limit: f32, pos: vec3<f32>, ignored: u32) -> NearestSdf {
-    var res: NearestSdf;
-    res.dist = limit;
-    res.id = PLACEHOLDER_ID;
-
-    var stack: array<u32, 16>;
-    stack[0] = 0u;
-    var stack_location = 1u;
-
-    while true {
-        if stack_location == 0 {
-            break;
-        }
-        stack_location -= 1u;
-        let node = nodes[stack[stack_location]];
-
-        let min = res.dist+0.001;
-        let c = max(min(pos, node.max), node.min);
-        let dist_sq = len_sq(c - pos);
-        if dist_sq > min * min {
-            continue;
-        }
-
-        if node.count == 0 {
-            let left = nodes[node.index];
-            let right = nodes[node.index+1];
-            let lc = max(min(pos, left.max), left.min);
-            let rc = max(min(pos, right.max), right.min);
-            let ldist = len_sq(lc - pos);
-            let rdist = len_sq(rc - pos);
-            let min_dist = res.dist * res.dist;
-
-            if ldist > rdist {
-                // We want the larger node to be at the end
-                if rdist > min_dist {
-                    // If the nearest node isn't close enough, skip both
-                    continue;
-                }
-                if ldist <= min_dist {
-                    // If the further node isn't close enough, skip it
-                    stack[stack_location] = node.index;
-                    stack_location += 1u;
-                }
-                stack[stack_location] = node.index+1;
-                stack_location += 1u;
-            } else {
-                if ldist > min_dist {
-                    // If the nearest node isn't close enough, skip both
-                    continue;
-                }
-                if rdist <= min_dist {
-                    // If the further node isn't close enough, skip it
-                    stack[stack_location] = node.index+1;
-                    stack_location += 1u;
-                }
-                stack[stack_location] = node.index;
-                stack_location += 1u;
-            }
-
-            continue;
-        }
-
-        for (var i = 0u; i < node.count; i++) {
-            let instance_id = node.index + i;
-            if instance_id == ignored {
-                continue;
-            }
-            let instance = instances[instance_id];
-            let relative_pos = instance.matrix * (pos - instance.translation);
-            let dist = sdf(relative_pos, instance.order_start, instance.data_start) * instance.scale;
-
-            res = sdf_min(res, dist, instance.material, instance_id);
-        }
-    }
-
-    return res;
-}
 
 fn to_instance(instance_id: u32, pos: vec3<f32>) -> f32 {
     let instance = instances[instance_id];
