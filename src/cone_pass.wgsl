@@ -146,10 +146,9 @@ fn project_node(aabb_min: vec3<f32>, aabb_max: vec3<f32>, origin: vec3<f32>, dir
 struct Frustum {
     planes: array<vec4<f32>, 6>,
     points: array<vec3<f32>, 8>,
-    cross: array<vec3<f32>, 18>,
-    signs: array<vec3<bool>, 18>,
-    mins: array<f32, 18>,
-    maxs: array<f32, 18>,
+    axes: array<vec3<f32>, 6>,
+    mins: array<vec3<f32>, 6>,
+    maxs: array<vec3<f32>, 6>,
 }
 
 fn get_cone_frustum(tl: vec4<f32>, tr: vec4<f32>, bl: vec4<f32>, br: vec4<f32>, center: vec3<f32>) -> Frustum{
@@ -185,6 +184,7 @@ fn get_cone_frustum(tl: vec4<f32>, tr: vec4<f32>, bl: vec4<f32>, br: vec4<f32>, 
     let frustum_axes = array(normalize(far_tr - far_tl), normalize(far_tl - far_bl), tl.xyz, tr.xyz, bl.xyz, br.xyz);
     for (var i = 0u; i < 6; i++) {
         let a = frustum_axes[i];
+        frustum.axes[i] = a;
         // Calculate the cross products between the current frustum edge and each aligned axis.
         // These axes doesn't need to be normalized since the min/max in both
         //   sides of the SAT check are always scaled according to it
@@ -194,29 +194,22 @@ fn get_cone_frustum(tl: vec4<f32>, tr: vec4<f32>, bl: vec4<f32>, br: vec4<f32>, 
             vec3<f32>(-a.y, a.x, 0.),
         );
         for (var j = 0u; j < 3; j++) {
-            let idx = i * 3 + j;
             let axis = axes[j];
-            frustum.cross[idx] = axis;
-            frustum.signs[idx] = sign(axis) == vec3<f32>(1);
-            frustum.mins[idx] = min(min(min(min(min(min(min(
-                dot(axis, near_tl),
-                dot(axis, near_tr)),
-                dot(axis, near_bl)),
-                dot(axis, near_br)),
-                dot(axis, far_tl)),
-                dot(axis, far_tr)),
-                dot(axis, far_bl)),
-                dot(axis, far_br),
+            let dntl = dot(axis, near_tl);
+            let dntr = dot(axis, near_tr);
+            let dnbl = dot(axis, near_bl);
+            let dnbr = dot(axis, near_br);
+            let dftl = dot(axis, far_tl);
+            let dftr = dot(axis, far_tr);
+            let dfbl = dot(axis, far_bl);
+            let dfbr = dot(axis, far_br);
+            frustum.mins[i][j] = min(min(min(min(min(min(min(
+                dntl, dntr), dnbl), dnbr),
+                dftl), dftr), dfbl), dfbr
             );
-            frustum.maxs[idx] = max(max(max(max(max(max(max(
-                dot(axis, near_tl),
-                dot(axis, near_tr)),
-                dot(axis, near_bl)),
-                dot(axis, near_br)),
-                dot(axis, far_tl)),
-                dot(axis, far_tr)),
-                dot(axis, far_bl)),
-                dot(axis, far_br),
+            frustum.maxs[i][j] = max(max(max(max(max(max(max(
+                dntl, dntr), dnbl), dnbr),
+                dftl), dftr), dfbl), dfbr
             );
         }
     }
@@ -257,18 +250,28 @@ fn check_aabb_frustum(frustum: Frustum, min: vec3<f32>, max: vec3<f32>) -> bool 
     }
 
     // Separating Axis Theorem for the cross products between each unique edge direction
-    var sat = 0u;
-    for (var i = 0u; i < 18; i++) {
-        let sign = frustum.signs[i];
-        let axis_min = select(max, min, sign);
-        let axis_max = select(min, max, sign);
+    for (var i = 0u; i < 6; i++) {
+        let a = frustum.axes[i];
+        let f_mins = frustum.mins[i];
+        let f_maxs = frustum.maxs[i];
 
-        let cross_axis = frustum.cross[i];
-        let t_min = dot(cross_axis, axis_min);
-        let t_max = dot(cross_axis, axis_max);
+        let axes = array(
+            vec3<f32>(0., -a.z, a.y),
+            vec3<f32>(a.z, 0., -a.x),
+            vec3<f32>(-a.y, a.x, 0.),
+        );
+        for (var j = 0u; j < 3; j++) {
+            let cross_axis = axes[j];
+            let sign = sign(cross_axis) == vec3<f32>(1.);
+            let axis_min = select(max, min, sign);
+            let axis_max = select(min, max, sign);
 
-        if frustum.mins[i] > t_max || t_min > frustum.maxs[i] {
-            return false;
+            let t_min = dot(cross_axis, axis_min);
+            let t_max = dot(cross_axis, axis_max);
+
+            if f_mins[j] > t_max || t_min > f_maxs[j] {
+                return false;
+            }
         }
     }
 

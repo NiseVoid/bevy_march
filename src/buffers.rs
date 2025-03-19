@@ -114,7 +114,13 @@ fn upload_new_buffers<Material: MarcherMaterial>(
     mut mat_indices: ResMut<MaterialIndices>,
     render_device: Res<RenderDevice>,
     render_queue: Res<RenderQueue>,
-    changed_query: Query<(), Or<(Changed<RenderedSdf<Material>>, Changed<GlobalTransform>)>>,
+    changed_query: Query<
+        (),
+        (
+            Or<(Changed<RenderedSdf<Material>>, Changed<GlobalTransform>)>,
+            With<RenderedSdf<Material>>,
+        ),
+    >,
     instances: Query<(&RenderedSdf<Material>, &GlobalTransform)>,
 ) {
     if sdfs.is_empty() || mats.is_empty() || instances.iter().len() == 0 {
