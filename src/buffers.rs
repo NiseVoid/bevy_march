@@ -18,7 +18,7 @@ use bevy::{
         Extract, Render, RenderApp, RenderSet,
     },
 };
-use bevy_prototype_sdf::{dim3::Dim3, ExecutableSdfs, Sdf3d, SdfBounding, SdfProcessing};
+use bevy_prototype_sdf::{dim3::Dim3, ExecutableSdfs, Sdf3d, SdfProcessing};
 use obvhs::{bvh2::builder::build_bvh2, BvhBuildParams};
 
 pub struct BufferPlugin<Material: MarcherMaterial> {
@@ -139,16 +139,16 @@ fn upload_new_buffers<Material: MarcherMaterial>(
         sdf_indices.clear();
         let mut order_buffer = BufferVec::<u32>::new(BufferUsages::STORAGE);
         let mut data_buffer = BufferVec::<f32>::new(BufferUsages::STORAGE);
-        for (index, order, data) in sdfs.iter() {
+        for (index, sdf) in sdfs.iter() {
             let order_start = order_buffer.len() as u32;
             let data_start = data_buffer.len() as u32;
 
-            order_buffer.push(order.len() as u32);
-            for node in order.iter() {
+            order_buffer.push(sdf.order.len() as u32);
+            for node in sdf.order.iter() {
                 order_buffer.push(node.exec());
                 order_buffer.push(node.value());
             }
-            for &v in data {
+            for &v in sdf.data {
                 data_buffer.push(v);
             }
 
@@ -202,7 +202,7 @@ fn upload_new_buffers<Material: MarcherMaterial>(
     let instances = instances
         .iter()
         .filter_map(|(RenderedSdf { sdf, material }, transform)| {
-            let Some((index, order, data)) = sdfs.get(sdf.id()) else {
+            let Some((index, sdf)) = sdfs.get(sdf.id()) else {
                 return None;
             };
             let sdf_index = sdf_indices[index];
@@ -251,7 +251,7 @@ fn upload_new_buffers<Material: MarcherMaterial>(
             let rotation = Quat::from_mat3a(&rot_matrix);
             let matrix = matrix_transpose * (inv_scale * inv_scale);
 
-            let aabb = (order, data).aabb(Isometry3d::from(rotation));
+            let aabb = sdf.aabb(Isometry3d::from(rotation));
             let scaled_aabb = Aabb3d::new(
                 aabb.center() * scale + translation,
                 (aabb.half_size() * scale).min(Vec3A::splat(1e9)),

@@ -26,7 +26,7 @@ fn main() {
             }),
             ..default()
         }),
-        FrameTimeDiagnosticsPlugin,
+        FrameTimeDiagnosticsPlugin::default(),
     ))
     .edit_schedule(PreUpdate, make_single_threaded)
     .edit_schedule(Update, make_single_threaded)
@@ -305,11 +305,11 @@ enum CursorState {
 }
 
 fn grab_cursor(
-    mut windows: Query<&mut Window>,
+    mut window: Single<&mut Window>,
     keyboard_input: Res<ButtonInput<KeyCode>>,
     mouse_input: Res<ButtonInput<MouseButton>>,
     mut cursor_state: ResMut<CursorState>,
-    mut text: Query<&mut Visibility, With<HelpText>>,
+    mut help_vis: Single<&mut Visibility, With<HelpText>>,
 ) {
     let grabbed = if keyboard_input.just_pressed(KeyCode::Escape) {
         false
@@ -319,14 +319,7 @@ fn grab_cursor(
         return;
     };
 
-    let Ok(mut window) = windows.get_single_mut() else {
-        return;
-    };
-    let Ok(mut help_vis) = text.get_single_mut() else {
-        return;
-    };
-
-    (window.cursor_options.grab_mode, *cursor_state, *help_vis) = if grabbed {
+    (window.cursor_options.grab_mode, *cursor_state, **help_vis) = if grabbed {
         (
             CursorGrabMode::Confined,
             CursorState::Locked,

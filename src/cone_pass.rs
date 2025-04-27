@@ -115,13 +115,14 @@ fn resize_texture(
     changed_marcher: Query<(), Or<(Added<MarcherSettings>, Changed<MarcherScale>)>>,
     mut textures: Query<(&Camera, &mut MarcherConeTexture, Option<&MarcherScale>)>,
     windows: Query<&Window>,
-    primary_window: Query<&Window, With<PrimaryWindow>>,
+    primary_window: Option<Single<&Window, With<PrimaryWindow>>>,
     mut images: ResMut<Assets<Image>>,
     render_device: Res<RenderDevice>,
 ) {
     if resized.read().last().is_none() && changed_marcher.is_empty() {
         return;
     }
+    let primary_window = primary_window.map(|w| *w);
 
     for (camera, mut texture, scale) in textures.iter_mut() {
         if let Some(old) = texture.old_buffer.take() {
@@ -131,7 +132,7 @@ fn resize_texture(
             continue;
         };
         let Some(window) = (match window {
-            WindowRef::Primary => primary_window.get_single().ok(),
+            WindowRef::Primary => primary_window,
             WindowRef::Entity(e) => windows.get(e).ok(),
         }) else {
             continue;
@@ -227,7 +228,7 @@ fn prepare_bind_group(
         );
         commands.entity(entity).insert(MarcherTextureBindGroup {
             bind_group,
-            size: depth.size,
+            size: depth.size_2d(),
         });
     }
 }

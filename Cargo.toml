@@ -1,10 +1,13 @@
 [package]
 name = "bevy_march"
-version = "0.1.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
 description = "SDF ray marching for bevy"
+repository = "https://github.com/NiseVoid/bevy_march"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
 keywords = ["bevy", "gamedev", "graphics"]
+version = "0.1.0"
+
+edition = "2024"
 
 [profile.dev]
 opt-level = 1
@@ -21,18 +24,20 @@ codegen-units = 1
 strip = true
 
 [dependencies]
-bevy = {version = "0.15.0", default-features = false, features = [
+bevy = {version = "0.16.0", default-features = false, features = [
+  "bevy_log",
   "bevy_color",
   "bevy_core_pipeline",
   "bevy_render",
   "bevy_window",
   "bevy_pbr", # Needed for DirectionalLight :(
 ]}
-bevy_prototype_sdf = { git = "https://github.com/NiseVoid/bevy_prototype_sdf", default-features=false, features = ["bevy_asset", "shader"]}
+bevy_prototype_sdf = {version="0.1", default-features=false, features = ["bevy_asset", "shader"]}
 obvhs = "0.2"
 
 [dev-dependencies]
-bevy = {version = "0.15.0-rc", default-features = false, features = [
+bevy = {version = "0.16.0", default-features = false, features = [
+  "std",
   "multi_threaded",
   "wayland",
   "bevy_color",

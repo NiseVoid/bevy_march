@@ -20,7 +20,7 @@ fn main() {
             }),
             ..default()
         }),
-        FrameTimeDiagnosticsPlugin,
+        FrameTimeDiagnosticsPlugin::default(),
     ));
 
     let main_pass_shader = app.world().resource::<AssetServer>().load("simple.wgsl");
