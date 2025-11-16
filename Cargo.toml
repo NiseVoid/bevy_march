@@ -55,7 +55,7 @@ bevy = {version = "0.17.0", default-features = false, features = [
   "wayland",
   "bevy_color",
   "bevy_core_pipeline",
-  "bevy_pbr",
+  "bevy_light",
   "bevy_render",
   "bevy_post_process",
   "bevy_winit",
@@ -72,3 +72,7 @@ bevy = {version = "0.17.0", default-features = false, features = [
 
 [patch.crates-io]
 bevy_prototype_sdf = {git = "https://github.com/NiseVoid/bevy_prototype_sdf", rev = "71290b4"}
+
+[[example]]
+name = "features"
+required-features = ["bevy/bevy_pbr"]
