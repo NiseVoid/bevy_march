@@ -175,7 +175,7 @@ fn setup(
         }),
         Transform::from_translation(vec3(0.0, 0.0, 5.0)).looking_at(Vec3::X, Vec3::Y),
         RenderLayers::from_layers(&[0, 1]),
-        MarcherSettings::default(),
+        MarcherSettings::default().with_ao().with_reflections(),
         MarcherMainTextures::new(&mut images, (8, 8)),
         MarcherConeTexture::new(&mut images, &device, (8, 8)),
         MarcherScale(1),

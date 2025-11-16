@@ -63,6 +63,7 @@ bevy = {version = "0.17.0", default-features = false, features = [
   "file_watcher",
   "embedded_watcher",
   "bevy_sprite",
+  "bevy_sprite_render",
   "bevy_text",
   "default_font",
   "ktx2",

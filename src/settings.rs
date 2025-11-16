@@ -36,6 +36,20 @@ pub struct MarcherSettings {
     pub near: f32,
     pub far: f32,
     pub light_dir: Vec3,
+    pub ambient_occlusion: u32,
+    pub reflections: u32,
+}
+
+impl MarcherSettings {
+    pub fn with_ao(mut self) -> Self {
+        self.ambient_occlusion = 1;
+        self
+    }
+
+    pub fn with_reflections(mut self) -> Self {
+        self.reflections = 1;
+        self
+    }
 }
 
 fn update_settings(

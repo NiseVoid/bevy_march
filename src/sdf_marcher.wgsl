@@ -11,6 +11,8 @@ struct RayMarcherSettings {
     near: f32,
     far: f32,
     light_dir: vec3<f32>,
+    ambient_occlusion: u32,
+    reflections: u32,
 }
 @group(0) @binding(0) var<uniform> settings: RayMarcherSettings;
 
@@ -237,6 +239,10 @@ const STEP_DIST = 0.04;
 const STEP_COUNT = 8u;
 
 fn get_occlusion(point: vec3<f32>, normal: vec3<f32>) -> f32 {
+    if settings.ambient_occlusion == 0 {
+        return 1.0;
+    }
+
     let max_radius = f32(STEP_COUNT) * STEP_DIST;
     let center = point + normal * max_radius;
     let max_radius_sq = max_radius * max_radius;

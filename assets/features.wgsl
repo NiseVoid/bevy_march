@@ -31,7 +31,7 @@ fn get_color(march: MarchSettings, res: MarchResult) -> vec3<f32> {
     var material = materials[res.material];
     var albedo = material.base_color;
     var emission = material.emissive;
-    if material.reflective > 0.01 {
+    if settings.reflections > 0 && material.reflective > 0.01 {
         let base_strength = (1. - material.reflective);
         let base_color = base_strength * material.base_color;
 
