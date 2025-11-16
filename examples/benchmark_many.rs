@@ -2,11 +2,12 @@ use bevy_march::*;
 use bevy_prototype_sdf::Sdf3d;
 
 use bevy::{
-    core_pipeline::bloom::Bloom,
+    camera::visibility::RenderLayers,
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
     math::vec3,
+    post_process::bloom::{Bloom, BloomCompositeMode, BloomPrefilter},
     prelude::*,
-    render::{render_resource::ShaderType, renderer::RenderDevice, view::RenderLayers},
+    render::{render_resource::ShaderType, renderer::RenderDevice, view::Hdr},
     sprite::Anchor,
 };
 
@@ -51,9 +52,9 @@ fn setup(
 ) {
     commands.spawn((
         Camera2d,
+        Hdr,
         Camera {
             order: 1,
-            hdr: true,
             clear_color: ClearColorConfig::None,
             ..default()
         },
@@ -64,17 +65,15 @@ fn setup(
             font_size: 18.0,
             ..default()
         },
-        Anchor::TopLeft,
+        Anchor::TOP_LEFT,
         FpsText,
     ));
 
     // Camera
     commands.spawn((
         Camera3d::default(),
-        Camera {
-            hdr: true,
-            ..default()
-        },
+        Hdr,
+        Camera { ..default() },
         Projection::Perspective(PerspectiveProjection {
             far: 100.,
             ..default()
@@ -87,8 +86,8 @@ fn setup(
         MarcherScale(1),
         Bloom {
             intensity: 0.3,
-            composite_mode: bevy::core_pipeline::bloom::BloomCompositeMode::Additive,
-            prefilter: bevy::core_pipeline::bloom::BloomPrefilter {
+            composite_mode: BloomCompositeMode::Additive,
+            prefilter: BloomPrefilter {
                 threshold: 1.,
                 threshold_softness: 0.0,
             },

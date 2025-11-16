@@ -1,33 +1,31 @@
 use crate::{
+    CONE_SIZE, MarcherScale, WORKGROUP_SIZE,
     buffers::{BufferLayout, MarcherStorageBindGroup},
     settings::MarcherSettings,
-    MarcherScale, CONE_SIZE, WORKGROUP_SIZE,
 };
 
-use std::borrow::Cow;
-
 use bevy::{
-    asset::embedded_asset,
+    asset::{RenderAssetUsages, embedded_asset},
+    camera::RenderTarget,
     core_pipeline::core_3d::graph::{Core3d, Node3d},
     ecs::query::QueryItem,
     prelude::*,
     render::{
-        camera::RenderTarget,
+        Render, RenderApp, RenderSystems,
         extract_component::{ComponentUniforms, ExtractComponent, ExtractComponentPlugin},
-        render_asset::{RenderAssetUsages, RenderAssets},
+        render_asset::RenderAssets,
         render_graph::{
-            NodeRunError, RenderGraphApp, RenderGraphContext, RenderLabel, ViewNode, ViewNodeRunner,
+            NodeRunError, RenderGraphContext, RenderGraphExt, RenderLabel, ViewNode, ViewNodeRunner,
         },
         render_resource::{
-            binding_types::{storage_buffer_read_only, texture_storage_2d, uniform_buffer},
             BindGroup, BindGroupEntries, BindGroupLayout, BindGroupLayoutEntries, Buffer,
             BufferInitDescriptor, BufferUsages, CachedComputePipelineId, ComputePassDescriptor,
             ComputePipelineDescriptor, Extent3d, PipelineCache, ShaderStages, StorageTextureAccess,
             TextureDimension, TextureFormat, TextureUsages,
+            binding_types::{storage_buffer_read_only, texture_storage_2d, uniform_buffer},
         },
         renderer::{RenderContext, RenderDevice},
         texture::GpuImage,
-        Render, RenderApp, RenderSet,
     },
     window::{PrimaryWindow, WindowRef, WindowResized},
 };
@@ -43,7 +41,7 @@ impl Plugin for ConePassPlugin {
         app.sub_app_mut(RenderApp)
             .add_systems(
                 Render,
-                prepare_bind_group.in_set(RenderSet::PrepareBindGroups),
+                prepare_bind_group.in_set(RenderSystems::PrepareBindGroups),
             )
             .add_render_graph_node::<ViewNodeRunner<MarcherConePass>>(Core3d, MarcherConePass)
             .add_render_graph_edges(Core3d, (MarcherConePass, Node3d::StartMainPass));
@@ -93,8 +91,7 @@ impl MarcherConeTexture {
         let mut scale_iter = uv_scale
             .to_array()
             .into_iter()
-            .map(|f| f.to_le_bytes())
-            .flatten();
+            .flat_map(|f| f.to_le_bytes());
         let scale_bytes = [0u8; 8].map(|_| scale_iter.next().unwrap());
         let uv_scale = device.create_buffer_with_data(&BufferInitDescriptor {
             label: Some("uv scale buffer"),
@@ -111,7 +108,7 @@ impl MarcherConeTexture {
 }
 
 fn resize_texture(
-    mut resized: EventReader<WindowResized>,
+    mut resized: MessageReader<WindowResized>,
     changed_marcher: Query<(), Or<(Added<MarcherSettings>, Changed<MarcherScale>)>>,
     mut textures: Query<(&Camera, &mut MarcherConeTexture, Option<&MarcherScale>)>,
     windows: Query<&Window>,
@@ -281,7 +278,7 @@ impl FromWorld for RayMarcherPipeline {
                 push_constant_ranges: Vec::new(),
                 shader: shader.clone(),
                 shader_defs: vec![],
-                entry_point: Cow::from("march"),
+                entry_point: Some("march".into()),
                 zero_initialize_workgroup_memory: false,
             });
 

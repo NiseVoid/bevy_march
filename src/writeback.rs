@@ -1,31 +1,32 @@
 use bevy::{
     asset::embedded_asset,
     core_pipeline::{
+        FullscreenShader,
         core_3d::graph::{Core3d, Node3d},
-        fullscreen_vertex_shader::fullscreen_shader_vertex_state,
         prepass::ViewPrepassTextures,
     },
     ecs::query::QueryItem,
     prelude::*,
     render::{
+        Render, RenderApp, RenderSystems,
         render_asset::RenderAssets,
         render_graph::{
-            NodeRunError, RenderGraphApp, RenderGraphContext, RenderLabel, ViewNode, ViewNodeRunner,
+            NodeRunError, RenderGraphContext, RenderGraphExt, RenderLabel, ViewNode, ViewNodeRunner,
         },
         render_resource::{
-            binding_types::{sampler, texture_2d},
             BindGroup, BindGroupEntries, BindGroupLayout, BindGroupLayoutEntries,
             CachedRenderPipelineId, ColorTargetState, ColorWrites, CompareFunction, DepthBiasState,
             DepthStencilState, FilterMode, FragmentState, MultisampleState, PipelineCache,
             PrimitiveState, RenderPassDescriptor, RenderPipelineDescriptor, Sampler,
-            SamplerBindingType, SamplerDescriptor, ShaderDefVal, ShaderStages, StencilFaceState,
-            StencilState, StoreOp, TextureFormat, TextureSampleType,
+            SamplerBindingType, SamplerDescriptor, ShaderStages, StencilFaceState, StencilState,
+            StoreOp, TextureFormat, TextureSampleType,
+            binding_types::{sampler, texture_2d},
         },
         renderer::{RenderContext, RenderDevice},
         texture::{DepthAttachment, GpuImage},
         view::{ViewDepthTexture, ViewTarget},
-        Render, RenderApp, RenderSet,
     },
+    shader::ShaderDefVal,
 };
 
 use crate::main_pass::{MarcherMainPass, MarcherMainTextures};
@@ -38,7 +39,7 @@ impl Plugin for WritebackPlugin {
         app.sub_app_mut(RenderApp)
             .add_systems(
                 Render,
-                prepare_bind_group.in_set(RenderSet::PrepareBindGroups),
+                prepare_bind_group.in_set(RenderSystems::PrepareBindGroups),
             )
             .add_render_graph_node::<ViewNodeRunner<MarcherWriteback>>(Core3d, MarcherWriteback)
             .add_render_graph_edges(Core3d, (MarcherMainPass, MarcherWriteback))
@@ -200,11 +201,22 @@ impl FromWorld for WritebackPipelines {
 
         let shader = world.load_asset("embedded://bevy_march/writeback.wgsl");
 
+        let fs_shader = world.resource::<FullscreenShader>().clone();
+
+        let pipeline = |world: &mut World, msaa| {
+            get_pipeline(
+                world,
+                layout.clone(),
+                shader.clone(),
+                fs_shader.clone(),
+                msaa,
+            )
+        };
         let pipelines = [
-            get_pipeline(world, layout.clone(), shader.clone(), Msaa::Off),
-            get_pipeline(world, layout.clone(), shader.clone(), Msaa::Sample2),
-            get_pipeline(world, layout.clone(), shader.clone(), Msaa::Sample4),
-            get_pipeline(world, layout.clone(), shader.clone(), Msaa::Sample8),
+            pipeline(world, Msaa::Off),
+            pipeline(world, Msaa::Sample2),
+            pipeline(world, Msaa::Sample4),
+            pipeline(world, Msaa::Sample8),
         ];
 
         Self {
@@ -219,6 +231,7 @@ fn get_pipeline(
     world: &mut World,
     layout: BindGroupLayout,
     shader: Handle<Shader>,
+    fs_shader: FullscreenShader,
     msaa: Msaa,
 ) -> WritebackPipeline {
     let multisample = MultisampleState {
@@ -248,11 +261,11 @@ fn get_pipeline(
             .queue_render_pipeline(RenderPipelineDescriptor {
                 label: Some("writeback_pipeline".into()),
                 layout: vec![layout.clone()],
-                vertex: fullscreen_shader_vertex_state(),
+                vertex: fs_shader.to_vertex_state(),
                 fragment: Some(FragmentState {
                     shader: shader.clone(),
                     shader_defs: vec![ShaderDefVal::Bool("COLOR".into(), true)],
-                    entry_point: "fragment".into(),
+                    entry_point: None,
                     targets: vec![Some(ColorTargetState {
                         // TODO: Use whatever the view has
                         format: TextureFormat::Rgba16Float,
@@ -273,11 +286,11 @@ fn get_pipeline(
             .queue_render_pipeline(RenderPipelineDescriptor {
                 label: Some("writeback_depth_pipeline".into()),
                 layout: vec![layout],
-                vertex: fullscreen_shader_vertex_state(),
+                vertex: fs_shader.to_vertex_state(),
                 fragment: Some(FragmentState {
                     shader,
                     shader_defs: vec![],
-                    entry_point: "fragment".into(),
+                    entry_point: None,
                     targets: vec![],
                 }),
                 primitive: PrimitiveState::default(),

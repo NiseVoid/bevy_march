@@ -1,15 +1,16 @@
 use bevy_march::*;
 
 use bevy::{
-    core_pipeline::bloom::Bloom,
+    camera::visibility::RenderLayers,
     diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin},
     input::mouse::MouseMotion,
     math::vec3,
+    post_process::bloom::{Bloom, BloomCompositeMode, BloomPrefilter},
     prelude::*,
-    render::{render_resource::ShaderType, renderer::RenderDevice, view::RenderLayers},
+    render::{render_resource::ShaderType, renderer::RenderDevice, view::Hdr},
     sprite::Anchor,
     text::TextBounds,
-    window::CursorGrabMode,
+    window::{CursorGrabMode, CursorOptions},
 };
 
 fn make_single_threaded(schedule: &mut Schedule) {
@@ -78,7 +79,7 @@ fn setup(
             font_size: 18.0,
             ..default()
         },
-        Anchor::TopLeft,
+        Anchor::TOP_LEFT,
         FpsText,
     ));
 
@@ -95,10 +96,10 @@ fn setup(
             ..default()
         },
         TextLayout {
-            justify: JustifyText::Center,
+            justify: Justify::Center,
             ..default()
         },
-        Anchor::Center,
+        Anchor::CENTER,
         TextBounds {
             width: Some(1200.),
             height: None,
@@ -108,9 +109,9 @@ fn setup(
 
     commands.spawn((
         Camera2d,
+        Hdr,
         Camera {
             order: 1,
-            hdr: true,
             clear_color: ClearColorConfig::None,
             ..default()
         },
@@ -167,10 +168,7 @@ fn setup(
     // Camera
     commands.spawn((
         Camera3d::default(),
-        Camera {
-            hdr: true,
-            ..default()
-        },
+        Hdr,
         Projection::Perspective(PerspectiveProjection {
             far: 100.,
             ..default()
@@ -183,8 +181,8 @@ fn setup(
         MarcherScale(1),
         Bloom {
             intensity: 0.5,
-            composite_mode: bevy::core_pipeline::bloom::BloomCompositeMode::Additive,
-            prefilter: bevy::core_pipeline::bloom::BloomPrefilter {
+            composite_mode: BloomCompositeMode::Additive,
+            prefilter: BloomPrefilter {
                 threshold: 1.,
                 threshold_softness: 0.0,
             },
@@ -305,7 +303,7 @@ enum CursorState {
 }
 
 fn grab_cursor(
-    mut window: Single<&mut Window>,
+    mut cursor_options: Single<&mut CursorOptions>,
     keyboard_input: Res<ButtonInput<KeyCode>>,
     mouse_input: Res<ButtonInput<MouseButton>>,
     mut cursor_state: ResMut<CursorState>,
@@ -319,7 +317,7 @@ fn grab_cursor(
         return;
     };
 
-    (window.cursor_options.grab_mode, *cursor_state, **help_vis) = if grabbed {
+    (cursor_options.grab_mode, *cursor_state, **help_vis) = if grabbed {
         (
             CursorGrabMode::Confined,
             CursorState::Locked,
@@ -332,14 +330,14 @@ fn grab_cursor(
             Visibility::Inherited,
         )
     };
-    window.cursor_options.visible = !grabbed;
+    cursor_options.visible = !grabbed;
 }
 
 fn rotate_and_move(
     time: Res<Time>,
     mut cameras: Query<&mut Transform, With<Camera3d>>,
     keyboard_input: Res<ButtonInput<KeyCode>>,
-    mut mouse_motion: EventReader<MouseMotion>,
+    mut mouse_motion: MessageReader<MouseMotion>,
     cursor_state: Res<CursorState>,
 ) {
     let rotation_input = -mouse_motion

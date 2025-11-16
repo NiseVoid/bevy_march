@@ -1,9 +1,9 @@
 use bevy::{
+    asset::RenderAssetUsages,
     math::bounding::Aabb2d,
     prelude::*,
     render::{
         extract_component::ExtractComponent,
-        render_asset::RenderAssetUsages,
         render_resource::{Extent3d, ShaderType, TextureDimension, TextureFormat, TextureUsages},
     },
 };

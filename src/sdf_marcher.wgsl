@@ -88,9 +88,9 @@ struct MarchResult {
     total_steps: u32,
 }
 
-const EPSILON_PER_DIST = 0.001;
-const EPSILON_MIN = 0.002;
-const EPSILON_MAX = 0.02;
+const EPSILON_PER_DIST: f32 = 0.001;
+const EPSILON_MIN: f32 = 0.002;
+const EPSILON_MAX: f32 = 0.02;
 
 fn march_ray(march: MarchSettings) -> MarchResult {
     let epsilon_per_dist = march.scale * EPSILON_PER_DIST;

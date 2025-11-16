@@ -1,33 +1,32 @@
 use crate::{
+    MarcherScale, WORKGROUP_SIZE,
     buffers::{BufferLayout, MarcherStorageBindGroup},
     cone_pass::{MarcherConePass, MarcherConeTexture},
     settings::MarcherSettings,
-    MarcherScale, WORKGROUP_SIZE,
 };
 
-use std::borrow::Cow;
-
 use bevy::{
+    asset::RenderAssetUsages,
+    camera::RenderTarget,
     core_pipeline::core_3d::graph::{Core3d, Node3d},
     ecs::query::QueryItem,
     prelude::*,
     render::{
-        camera::RenderTarget,
+        Render, RenderApp, RenderSystems,
         extract_component::{ComponentUniforms, ExtractComponent, ExtractComponentPlugin},
-        render_asset::{RenderAssetUsages, RenderAssets},
+        render_asset::RenderAssets,
         render_graph::{
-            NodeRunError, RenderGraphApp, RenderGraphContext, RenderLabel, ViewNode, ViewNodeRunner,
+            NodeRunError, RenderGraphContext, RenderGraphExt, RenderLabel, ViewNode, ViewNodeRunner,
         },
         render_resource::{
-            binding_types::{texture_storage_2d, uniform_buffer},
             BindGroup, BindGroupEntries, BindGroupLayout, BindGroupLayoutEntries,
             CachedComputePipelineId, ComputePassDescriptor, ComputePipelineDescriptor, Extent3d,
             PipelineCache, ShaderStages, StorageTextureAccess, TextureDimension, TextureFormat,
             TextureUsages,
+            binding_types::{texture_storage_2d, uniform_buffer},
         },
         renderer::{RenderContext, RenderDevice},
         texture::GpuImage,
-        Render, RenderApp, RenderSet,
     },
     window::{PrimaryWindow, WindowRef, WindowResized},
 };
@@ -42,7 +41,7 @@ impl Plugin for MainPassPlugin {
         app.sub_app_mut(RenderApp)
             .add_systems(
                 Render,
-                prepare_bind_group.in_set(RenderSet::PrepareBindGroups),
+                prepare_bind_group.in_set(RenderSystems::PrepareBindGroups),
             )
             .add_render_graph_node::<ViewNodeRunner<MarcherMainPass>>(Core3d, MarcherMainPass)
             .add_render_graph_edges(Core3d, (MarcherConePass, MarcherMainPass))
@@ -104,7 +103,7 @@ impl MarcherMainTextures {
 }
 
 fn resize_textures(
-    mut resized: EventReader<WindowResized>,
+    mut resized: MessageReader<WindowResized>,
     changed_marcher: Query<(), Or<(Added<MarcherSettings>, Changed<MarcherScale>)>>,
     mut textures: Query<(&Camera, &mut MarcherMainTextures, Option<&MarcherScale>)>,
     windows: Query<&Window>,
@@ -275,7 +274,7 @@ impl FromWorld for RayMarcherPipeline {
                 push_constant_ranges: Vec::new(),
                 shader: shader.clone(),
                 shader_defs: vec![],
-                entry_point: Cow::from("march"),
+                entry_point: Some("march".into()),
                 zero_initialize_workgroup_memory: false,
             });
 

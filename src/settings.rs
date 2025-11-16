@@ -1,12 +1,12 @@
 use crate::shadow_pass::{MarcherShadowArea, MarcherShadowSettings};
 
 use bevy::{
+    camera::visibility::RenderLayers,
     math::{bounding::Aabb3d, vec3a},
     prelude::*,
     render::{
         extract_component::{ExtractComponent, ExtractComponentPlugin, UniformComponentPlugin},
         render_resource::ShaderType,
-        view::RenderLayers,
     },
 };
 
@@ -20,7 +20,7 @@ impl Plugin for SettingsPlugin {
         ))
         .add_systems(
             PostUpdate,
-            update_settings.after(TransformSystem::TransformPropagate),
+            update_settings.after(TransformSystems::Propagate),
         );
     }
 }
@@ -82,8 +82,7 @@ fn update_settings(
         let mut frustum_aabb = Aabb3d::new(fwd * settings.near, Vec3::ZERO);
         for vertex in [tl_dir, tr_dir, bl_dir, br_dir]
             .iter()
-            .map(|&d| [d * settings.near, d * settings.far])
-            .flatten()
+            .flat_map(|&d| [d * settings.near, d * settings.far])
         {
             frustum_aabb.min = frustum_aabb.min.min(vertex);
             frustum_aabb.max = frustum_aabb.max.max(vertex);

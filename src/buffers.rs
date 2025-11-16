@@ -4,22 +4,23 @@ use std::{marker::PhantomData, num::NonZeroU64};
 
 use bevy::{
     math::{
+        Vec3A,
         bounding::{Aabb3d, BoundingVolume},
-        vec3, Vec3A,
+        vec3,
     },
     prelude::*,
     render::{
+        Extract, Render, RenderApp, RenderSystems,
         render_resource::{
-            binding_types::{storage_buffer_read_only, storage_buffer_read_only_sized},
             BindGroup, BindGroupEntries, BindGroupLayout, BindGroupLayoutEntries, Buffer,
             BufferUsages, BufferVec, ShaderStages, ShaderType,
+            binding_types::{storage_buffer_read_only, storage_buffer_read_only_sized},
         },
         renderer::{RenderDevice, RenderQueue},
-        Extract, Render, RenderApp, RenderSet,
     },
 };
-use bevy_prototype_sdf::{dim3::Dim3, ExecutableSdfs, Sdf3d, SdfProcessing};
-use obvhs::{bvh2::builder::build_bvh2, BvhBuildParams};
+use bevy_prototype_sdf::{ExecutableSdfs, Sdf3d, SdfProcessing, dim3::Dim3};
+use obvhs::{BvhBuildParams, bvh2::builder::build_bvh2};
 
 pub struct BufferPlugin<Material: MarcherMaterial> {
     _phantom: PhantomData<Material>,
@@ -44,7 +45,7 @@ impl<Material: MarcherMaterial> Plugin for BufferPlugin<Material> {
             .add_systems(ExtractSchedule, extract_buffers)
             .add_systems(
                 Render,
-                prepare_bind_group.in_set(RenderSet::PrepareBindGroups),
+                prepare_bind_group.in_set(RenderSystems::PrepareBindGroups),
             );
     }
 
@@ -106,10 +107,10 @@ pub struct BvhNode {
 // TODO: We can probably split this up into three systems each with different scheduling constraints
 fn upload_new_buffers<Material: MarcherMaterial>(
     mut buffers: ResMut<Buffers>,
-    mut sdf_events: EventReader<AssetEvent<Sdf3d>>,
+    mut sdf_events: MessageReader<AssetEvent<Sdf3d>>,
     sdfs: ExecutableSdfs<Dim3>,
     mut sdf_indices: ResMut<SdfIndices>,
-    mut mat_events: EventReader<AssetEvent<Material>>,
+    mut mat_events: MessageReader<AssetEvent<Material>>,
     mats: Res<Assets<Material>>,
     mut mat_indices: ResMut<MaterialIndices>,
     render_device: Res<RenderDevice>,
@@ -163,10 +164,10 @@ fn upload_new_buffers<Material: MarcherMaterial>(
             data_buffer.push(0.);
         }
 
-        order_buffer.write_buffer(&*render_device, &*render_queue);
+        order_buffer.write_buffer(&render_device, &render_queue);
         new_buffers.0 = order_buffer.buffer().cloned();
 
-        data_buffer.write_buffer(&*render_device, &*render_queue);
+        data_buffer.write_buffer(&render_device, &render_queue);
         new_buffers.1 = data_buffer.buffer().cloned();
     }
 
@@ -189,7 +190,7 @@ fn upload_new_buffers<Material: MarcherMaterial>(
             mat_indices[index] = start_offset;
         }
 
-        mats_buffer.write_buffer(&*render_device, &*render_queue);
+        mats_buffer.write_buffer(&render_device, &render_queue);
         new_buffers.2 = mats_buffer.buffer().cloned();
     }
 
@@ -202,9 +203,7 @@ fn upload_new_buffers<Material: MarcherMaterial>(
     let instances = instances
         .iter()
         .filter_map(|(RenderedSdf { sdf, material }, transform)| {
-            let Some((index, sdf)) = sdfs.get(sdf.id()) else {
-                return None;
-            };
+            let (index, sdf) = sdfs.get(sdf.id())?;
             let sdf_index = sdf_indices[index];
 
             let AssetId::Index { index, .. } = material.id() else {
@@ -291,13 +290,13 @@ fn upload_new_buffers<Material: MarcherMaterial>(
             index: n.first_index,
         });
     });
-    nodes.write_buffer(&*render_device, &*render_queue);
+    nodes.write_buffer(&render_device, &render_queue);
 
     let mut instance_buffer = BufferVec::<Instance>::new(BufferUsages::STORAGE);
     bvh.primitive_indices.iter().for_each(|i| {
         instance_buffer.push(unordered_instances[*i as usize].clone());
     });
-    instance_buffer.write_buffer(&*render_device, &*render_queue);
+    instance_buffer.write_buffer(&render_device, &render_queue);
 
     let cur_ref = buffers.current.as_ref();
     buffers.new = Some(BufferSet {

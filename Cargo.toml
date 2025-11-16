@@ -5,9 +5,22 @@ repository = "https://github.com/NiseVoid/bevy_march"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
 keywords = ["bevy", "gamedev", "graphics"]
-version = "0.1.0"
+version = "0.2.0"
 
 edition = "2024"
+
+[lints.rust]
+# missing_docs = "warn"
+unsafe_op_in_unsafe_fn = "warn"
+
+[lints.clippy]
+type_complexity = "allow"
+too_many_arguments = "allow"
+doc_markdown = "warn"
+manual_let_else = "warn"
+redundant_else = "warn"
+match_same_arms = "warn"
+semicolon_if_nothing_returned = "warn"
 
 [profile.dev]
 opt-level = 1
@@ -24,7 +37,7 @@ codegen-units = 1
 strip = true
 
 [dependencies]
-bevy = {version = "0.16.0", default-features = false, features = [
+bevy = {version = "0.17.0", default-features = false, features = [
   "bevy_log",
   "bevy_color",
   "bevy_core_pipeline",
@@ -33,10 +46,10 @@ bevy = {version = "0.16.0", default-features = false, features = [
   "bevy_pbr", # Needed for DirectionalLight :(
 ]}
 bevy_prototype_sdf = {version="0.1", default-features=false, features = ["bevy_asset", "shader"]}
-obvhs = "0.2"
+obvhs = "0.2.2"
 
 [dev-dependencies]
-bevy = {version = "0.16.0", default-features = false, features = [
+bevy = {version = "0.17.0", default-features = false, features = [
   "std",
   "multi_threaded",
   "wayland",
@@ -44,6 +57,7 @@ bevy = {version = "0.16.0", default-features = false, features = [
   "bevy_core_pipeline",
   "bevy_pbr",
   "bevy_render",
+  "bevy_post_process",
   "bevy_winit",
   "tonemapping_luts",
   "file_watcher",
@@ -52,5 +66,8 @@ bevy = {version = "0.16.0", default-features = false, features = [
   "bevy_text",
   "default_font",
   "ktx2",
-  "zstd",
+  "zstd_rust",
 ]}
+
+[patch.crates-io]
+bevy_prototype_sdf = {git = "https://github.com/NiseVoid/bevy_prototype_sdf", rev = "71290b4"}
