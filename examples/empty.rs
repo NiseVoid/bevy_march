@@ -2,7 +2,7 @@ use bevy_march::*;
 
 use bevy::{
     prelude::*,
-    render::{render_resource::ShaderType, renderer::RenderDevice},
+    render::{render_resource::ShaderType, renderer::RenderDevice, view::Hdr},
 };
 
 fn main() {
@@ -27,11 +27,8 @@ impl MarcherMaterial for SdfMaterial {}
 fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>, device: Res<RenderDevice>) {
     commands.spawn((
         Camera3d::default(),
-        Camera {
-            // TODO: We should not need HDR for a minimal setup
-            hdr: true,
-            ..default()
-        },
+        // TODO: We should not need HDR for a minimal setup
+        Hdr,
         MarcherSettings::default(),
         MarcherMainTextures::new(&mut images, (8, 8)),
         MarcherConeTexture::new(&mut images, &device, (8, 8)),
