@@ -19,7 +19,7 @@ use bevy::{
             NodeRunError, RenderGraphContext, RenderGraphExt, RenderLabel, ViewNode, ViewNodeRunner,
         },
         render_resource::{
-            BindGroup, BindGroupEntries, BindGroupLayout, BindGroupLayoutEntries,
+            BindGroup, BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries,
             CachedComputePipelineId, ComputePassDescriptor, ComputePipelineDescriptor, Extent3d,
             PipelineCache, ShaderStages, StorageTextureAccess, TextureDimension, TextureFormat,
             TextureUsages,
@@ -105,7 +105,11 @@ impl MarcherMainTextures {
 fn resize_textures(
     mut resized: MessageReader<WindowResized>,
     changed_marcher: Query<(), Or<(Added<MarcherSettings>, Changed<MarcherScale>)>>,
-    mut textures: Query<(&Camera, &mut MarcherMainTextures, Option<&MarcherScale>)>,
+    mut textures: Query<(
+        &RenderTarget,
+        &mut MarcherMainTextures,
+        Option<&MarcherScale>,
+    )>,
     windows: Query<&Window>,
     primary_window: Option<Single<&Window, With<PrimaryWindow>>>,
     mut images: ResMut<Assets<Image>>,
@@ -115,8 +119,8 @@ fn resize_textures(
     }
     let primary_window = primary_window.map(|w| *w);
 
-    for (camera, mut textures, scale) in textures.iter_mut() {
-        let RenderTarget::Window(window) = camera.target else {
+    for (target, mut textures, scale) in textures.iter_mut() {
+        let &RenderTarget::Window(window) = target else {
             continue;
         };
         let Some(window) = (match window {
@@ -165,7 +169,7 @@ impl ViewNode for MarcherMainPass {
 
         let settings_bind_group = render_context.render_device().create_bind_group(
             "marcher_settings_bind_group",
-            &ray_marcher_pipeline.settings_layout,
+            &pipeline_cache.get_bind_group_layout(&ray_marcher_pipeline.settings_layout),
             &BindGroupEntries::sequential((settings_binding.clone(),)),
         );
 
@@ -199,7 +203,9 @@ fn prepare_bind_group(
     gpu_images: Res<RenderAssets<GpuImage>>,
     textures: Query<(Entity, &MarcherMainTextures, &MarcherConeTexture)>,
     render_device: Res<RenderDevice>,
+    cache: Res<PipelineCache>,
 ) {
+    let layout = cache.get_bind_group_layout(&pipeline.texture_layout);
     for (entity, textures, cone_texture) in textures.iter() {
         let Some(color) = gpu_images.get(textures.color.id()) else {
             continue;
@@ -212,7 +218,7 @@ fn prepare_bind_group(
         };
         let bind_group = render_device.create_bind_group(
             None,
-            &pipeline.texture_layout,
+            &layout,
             &BindGroupEntries::sequential((
                 &depth.texture_view,
                 &cone.texture_view,
@@ -228,23 +234,21 @@ fn prepare_bind_group(
 
 #[derive(Resource)]
 struct RayMarcherPipeline {
-    settings_layout: BindGroupLayout,
-    texture_layout: BindGroupLayout,
+    settings_layout: BindGroupLayoutDescriptor,
+    texture_layout: BindGroupLayoutDescriptor,
     pipeline_id: CachedComputePipelineId,
 }
 
 impl FromWorld for RayMarcherPipeline {
     fn from_world(world: &mut World) -> Self {
-        let render_device = world.resource::<RenderDevice>();
-
-        let settings_layout = render_device.create_bind_group_layout(
+        let settings_layout = BindGroupLayoutDescriptor::new(
             "marcher_settings_bind_group_layout",
             &BindGroupLayoutEntries::sequential(
                 ShaderStages::COMPUTE,
                 (uniform_buffer::<MarcherSettings>(false),),
             ),
         );
-        let texture_layout = render_device.create_bind_group_layout(
+        let texture_layout = BindGroupLayoutDescriptor::new(
             "marcher_main_pass_bind_group_layout",
             &BindGroupLayoutEntries::sequential(
                 ShaderStages::COMPUTE,

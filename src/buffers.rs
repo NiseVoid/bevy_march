@@ -12,8 +12,8 @@ use bevy::{
     render::{
         Extract, Render, RenderApp, RenderSystems,
         render_resource::{
-            BindGroup, BindGroupEntries, BindGroupLayout, BindGroupLayoutEntries, Buffer,
-            BufferUsages, BufferVec, ShaderStages, ShaderType,
+            BindGroup, BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, Buffer,
+            BufferUsages, BufferVec, PipelineCache, ShaderStages, ShaderType,
             binding_types::{storage_buffer_read_only, storage_buffer_read_only_sized},
         },
         renderer::{RenderDevice, RenderQueue},
@@ -351,14 +351,13 @@ fn extract_buffers(buffers: Extract<Res<Buffers>>, mut extracted: ResMut<Current
 }
 
 #[derive(Resource, Deref)]
-pub struct BufferLayout(BindGroupLayout);
+pub struct BufferLayout(BindGroupLayoutDescriptor);
 
 impl FromWorld for BufferLayout {
     fn from_world(world: &mut World) -> Self {
         let mat_size = **world.resource::<MaterialSize>();
-        let render_device = world.resource::<RenderDevice>();
 
-        let storage_layout = render_device.create_bind_group_layout(
+        let storage_layout = BindGroupLayoutDescriptor::new(
             "marcher_storage_bind_group_layout",
             &BindGroupLayoutEntries::sequential(
                 ShaderStages::COMPUTE,
@@ -389,14 +388,16 @@ fn prepare_bind_group(
     buffer_set: Res<CurrentBufferSet>,
     render_device: Res<RenderDevice>,
     buffer_layout: Res<BufferLayout>,
+    cache: Res<PipelineCache>,
 ) {
+    let layout = cache.get_bind_group_layout(&buffer_layout);
     for entity in marchers.iter() {
         let Some(buffer_set) = &**buffer_set else {
             continue;
         };
         let bind_group = render_device.create_bind_group(
             None,
-            &buffer_layout,
+            &layout,
             &BindGroupEntries::sequential((
                 buffer_set.order.as_entire_binding(),
                 buffer_set.data.as_entire_binding(),

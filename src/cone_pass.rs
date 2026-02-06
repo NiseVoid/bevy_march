@@ -18,7 +18,7 @@ use bevy::{
             NodeRunError, RenderGraphContext, RenderGraphExt, RenderLabel, ViewNode, ViewNodeRunner,
         },
         render_resource::{
-            BindGroup, BindGroupEntries, BindGroupLayout, BindGroupLayoutEntries, Buffer,
+            BindGroup, BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, Buffer,
             BufferInitDescriptor, BufferUsages, CachedComputePipelineId, ComputePassDescriptor,
             ComputePipelineDescriptor, Extent3d, PipelineCache, ShaderStages, StorageTextureAccess,
             TextureDimension, TextureFormat, TextureUsages,
@@ -110,7 +110,11 @@ impl MarcherConeTexture {
 fn resize_texture(
     mut resized: MessageReader<WindowResized>,
     changed_marcher: Query<(), Or<(Added<MarcherSettings>, Changed<MarcherScale>)>>,
-    mut textures: Query<(&Camera, &mut MarcherConeTexture, Option<&MarcherScale>)>,
+    mut textures: Query<(
+        &RenderTarget,
+        &mut MarcherConeTexture,
+        Option<&MarcherScale>,
+    )>,
     windows: Query<&Window>,
     primary_window: Option<Single<&Window, With<PrimaryWindow>>>,
     mut images: ResMut<Assets<Image>>,
@@ -121,11 +125,11 @@ fn resize_texture(
     }
     let primary_window = primary_window.map(|w| *w);
 
-    for (camera, mut texture, scale) in textures.iter_mut() {
+    for (target, mut texture, scale) in textures.iter_mut() {
         if let Some(old) = texture.old_buffer.take() {
             old.destroy();
         };
-        let RenderTarget::Window(window) = camera.target else {
+        let &RenderTarget::Window(window) = target else {
             continue;
         };
         let Some(window) = (match window {
@@ -176,7 +180,7 @@ impl ViewNode for MarcherConePass {
 
         let settings_bind_group = render_context.render_device().create_bind_group(
             "marcher_settings_bind_group",
-            &ray_marcher_pipeline.settings_layout,
+            &pipeline_cache.get_bind_group_layout(&ray_marcher_pipeline.settings_layout),
             &BindGroupEntries::sequential((settings_binding.clone(),)),
         );
 
@@ -210,14 +214,16 @@ fn prepare_bind_group(
     gpu_images: Res<RenderAssets<GpuImage>>,
     textures: Query<(Entity, &MarcherConeTexture)>,
     render_device: Res<RenderDevice>,
+    cache: Res<PipelineCache>,
 ) {
+    let layout = cache.get_bind_group_layout(&pipeline.texture_layout);
     for (entity, texture) in textures.iter() {
         let Some(depth) = gpu_images.get(texture.texture.id()) else {
             continue;
         };
         let bind_group = render_device.create_bind_group(
             None,
-            &pipeline.texture_layout,
+            &layout,
             &BindGroupEntries::sequential((
                 &depth.texture_view,
                 texture.uv_scale.as_entire_binding(),
@@ -232,23 +238,21 @@ fn prepare_bind_group(
 
 #[derive(Resource)]
 struct RayMarcherPipeline {
-    settings_layout: BindGroupLayout,
-    texture_layout: BindGroupLayout,
+    settings_layout: BindGroupLayoutDescriptor,
+    texture_layout: BindGroupLayoutDescriptor,
     pipeline_id: CachedComputePipelineId,
 }
 
 impl FromWorld for RayMarcherPipeline {
     fn from_world(world: &mut World) -> Self {
-        let render_device = world.resource::<RenderDevice>();
-
-        let settings_layout = render_device.create_bind_group_layout(
+        let settings_layout = BindGroupLayoutDescriptor::new(
             "marcher_settings_bind_group_layout",
             &BindGroupLayoutEntries::sequential(
                 ShaderStages::COMPUTE,
                 (uniform_buffer::<MarcherSettings>(false),),
             ),
         );
-        let storage_layout = render_device.create_bind_group_layout(
+        let storage_layout = BindGroupLayoutDescriptor::new(
             "marcher_cone_pass_bind_group_layout",
             &BindGroupLayoutEntries::sequential(
                 ShaderStages::COMPUTE,

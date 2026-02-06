@@ -14,7 +14,7 @@ use bevy::{
             NodeRunError, RenderGraphContext, RenderGraphExt, RenderLabel, ViewNode, ViewNodeRunner,
         },
         render_resource::{
-            BindGroup, BindGroupEntries, BindGroupLayout, BindGroupLayoutEntries,
+            BindGroup, BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries,
             CachedRenderPipelineId, ColorTargetState, ColorWrites, CompareFunction, DepthBiasState,
             DepthStencilState, FilterMode, FragmentState, MultisampleState, PipelineCache,
             PrimitiveState, RenderPassDescriptor, RenderPipelineDescriptor, Sampler,
@@ -140,7 +140,9 @@ fn prepare_bind_group(
     gpu_images: Res<RenderAssets<GpuImage>>,
     textures: Query<(Entity, &MarcherMainTextures)>,
     render_device: Res<RenderDevice>,
+    cache: Res<PipelineCache>,
 ) {
+    let layout = cache.get_bind_group_layout(&pipeline.layout);
     for (entity, textures) in textures.iter() {
         // TODO: Render previous textures if the current ones can't be found
         let Some(color) = gpu_images.get(textures.color.id()) else {
@@ -151,7 +153,7 @@ fn prepare_bind_group(
         };
         let bind_group = render_device.create_bind_group(
             None,
-            &pipeline.layout,
+            &layout,
             &BindGroupEntries::sequential((
                 &color.texture_view,
                 &depth.texture_view,
@@ -166,7 +168,7 @@ fn prepare_bind_group(
 
 #[derive(Resource)]
 struct WritebackPipelines {
-    layout: BindGroupLayout,
+    layout: BindGroupLayoutDescriptor,
     sampler: Sampler,
     pipelines: [WritebackPipeline; 4],
 }
@@ -181,7 +183,7 @@ impl FromWorld for WritebackPipelines {
         let render_device = world.resource::<RenderDevice>();
 
         // We need to define the bind group layout used for our pipeline
-        let layout = render_device.create_bind_group_layout(
+        let layout = BindGroupLayoutDescriptor::new(
             "post_process_bind_group_layout",
             &BindGroupLayoutEntries::sequential(
                 // The layout entries will only be visible in the fragment stage
@@ -229,7 +231,7 @@ impl FromWorld for WritebackPipelines {
 
 fn get_pipeline(
     world: &mut World,
-    layout: BindGroupLayout,
+    layout: BindGroupLayoutDescriptor,
     shader: Handle<Shader>,
     fs_shader: FullscreenShader,
     msaa: Msaa,
